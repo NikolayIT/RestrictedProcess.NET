@@ -12,7 +12,7 @@ namespace RestrictedProcess.JobObjects
     /// <see href="http://msdn.microsoft.com/en-us/library/windows/desktop/ms684152%28v=vs.85%29.aspx">More information</see>
     /// </summary>
     [Flags]
-    public enum UiRestrictionFlags
+    internal enum UiRestrictionFlags
     {
         /// <summary>
         /// Prevents processes associated with the job from using USER handles owned by processes not associated with the same job.

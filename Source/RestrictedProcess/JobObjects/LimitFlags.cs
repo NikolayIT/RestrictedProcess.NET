@@ -12,7 +12,7 @@ namespace RestrictedProcess.JobObjects
     /// <see href="http://msdn.microsoft.com/en-us/library/ms684147%28v=vs.85%29.aspx">More information</see>
     /// </summary>
     [Flags]
-    public enum LimitFlags
+    internal enum LimitFlags
     {
         //// Basic Limits
 

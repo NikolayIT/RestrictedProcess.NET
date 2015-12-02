@@ -13,7 +13,7 @@ namespace RestrictedProcess.Process
 
     [SuppressUnmanagedCodeSecurity]
     [HostProtection(SecurityAction.LinkDemand, MayLeakOnAbort = true)]
-    public sealed class SafeLocalMemHandle : SafeHandleZeroOrMinusOneIsInvalid
+    internal sealed class SafeLocalMemHandle : SafeHandleZeroOrMinusOneIsInvalid
     {
         internal SafeLocalMemHandle()
             : base(true)

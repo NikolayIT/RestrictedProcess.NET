@@ -5,7 +5,7 @@
 
 namespace RestrictedProcess.Process
 {
-    public enum SecurityMandatoryLabel
+    internal enum SecurityMandatoryLabel
     {
         /// <summary>
         /// Processes that are logged on anonymously are automatically designated as Untrusted

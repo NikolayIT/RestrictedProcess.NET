@@ -9,7 +9,7 @@ namespace RestrictedProcess.Process
     using System.Runtime.InteropServices;
 
     [StructLayout(LayoutKind.Sequential)]
-    public struct ProcessMemoryCounters
+    internal struct ProcessMemoryCounters
     {
         public int SizeInBytes;
         public int PageFaultCount;

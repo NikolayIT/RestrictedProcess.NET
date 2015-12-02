@@ -12,7 +12,7 @@ namespace RestrictedProcess.Process
     /// Applications must use functions and structures to manipulate LUID values.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    public struct Luid
+    internal struct Luid
     {
         public uint LowPart;
 

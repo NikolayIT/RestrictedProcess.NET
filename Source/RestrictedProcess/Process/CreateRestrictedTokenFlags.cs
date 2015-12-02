@@ -5,7 +5,7 @@
 
 namespace RestrictedProcess.Process
 {
-    public enum CreateRestrictedTokenFlags
+    internal enum CreateRestrictedTokenFlags
     {
         /// <summary>
         /// Disables all privileges in the new token except the SeChangeNotifyPrivilege privilege. If this value is specified, the DeletePrivilegeCount and PrivilegesToDelete parameters are ignored.

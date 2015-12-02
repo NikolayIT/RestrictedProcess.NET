@@ -18,7 +18,7 @@ namespace RestrictedProcess.Process
 
     using Microsoft.Win32.SafeHandles;
 
-    internal class RestrictedProcess : IDisposable
+    public class RestrictedProcess : IDisposable
     {
         private readonly SafeProcessHandle safeProcessHandle;
         private readonly string fileName = string.Empty;

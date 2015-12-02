@@ -5,11 +5,29 @@
 
 namespace RestrictedProcess
 {
+    /// <summary>
+    /// The process execution result type.
+    /// </summary>
     public enum ProcessExecutionResultType
     {
+        /// <summary>
+        /// Success result.
+        /// </summary>
         Success = 0,
+
+        /// <summary>
+        /// Time limit result.
+        /// </summary>
         TimeLimit = 1,
+
+        /// <summary>
+        /// Memory limit result.
+        /// </summary>
         MemoryLimit = 2,
+
+        /// <summary>
+        /// Run time error result.
+        /// </summary>
         RunTimeError = 4,
     }
 }

@@ -11,7 +11,7 @@ namespace RestrictedProcess.Process
 
     [SuppressMessage("StyleCop.CSharp.MaintainabilityRules", "SA1401:FieldsMustBePrivate", Justification = "Reviewed. Suppression is OK here.")]
     [StructLayout(LayoutKind.Sequential)]
-    public class SecurityAttributes
+    internal class SecurityAttributes
     {
         public int Length = 12;
 

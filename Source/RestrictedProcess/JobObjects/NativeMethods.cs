@@ -8,7 +8,7 @@ namespace RestrictedProcess.JobObjects
     using System;
     using System.Runtime.InteropServices;
 
-    public static class NativeMethods
+    internal static class NativeMethods
     {
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         internal static extern IntPtr CreateJobObject([In]ref SecurityAttributes jobAttributes, string name);

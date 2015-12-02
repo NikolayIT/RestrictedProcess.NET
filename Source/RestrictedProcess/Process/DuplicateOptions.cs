@@ -8,7 +8,7 @@ namespace RestrictedProcess.Process
     using System;
 
     [Flags]
-    public enum DuplicateOptions : uint
+    internal enum DuplicateOptions : uint
     {
         /// <summary>
         /// Closes the source handle. This occurs regardless of any error status returned.

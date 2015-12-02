@@ -12,7 +12,7 @@ namespace RestrictedProcess.Process
     /// The structure represents a security identifier (SID) and its attributes. SIDs are used to uniquely identify users or groups.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    public struct SidAndAttributes
+    internal struct SidAndAttributes
     {
         public IntPtr Sid;
 

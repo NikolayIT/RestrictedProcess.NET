@@ -12,7 +12,7 @@ namespace RestrictedProcess.Process
     using Microsoft.Win32.SafeHandles;
 
     [SuppressUnmanagedCodeSecurity]
-    public sealed class SafeProcessHandle : SafeHandleZeroOrMinusOneIsInvalid
+    internal sealed class SafeProcessHandle : SafeHandleZeroOrMinusOneIsInvalid
     {
         private static SafeProcessHandle invalidHandle = new SafeProcessHandle(IntPtr.Zero);
 

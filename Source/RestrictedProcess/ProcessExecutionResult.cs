@@ -7,7 +7,7 @@ namespace RestrictedProcess
 {
     using System;
 
-    internal class ProcessExecutionResult
+    public class ProcessExecutionResult
     {
         public ProcessExecutionResult()
         {

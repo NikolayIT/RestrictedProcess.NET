@@ -11,7 +11,7 @@ namespace RestrictedProcess.Process
     /// The structure specifies the mandatory integrity level for a token.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    public struct TokenMandatoryLabel
+    internal struct TokenMandatoryLabel
     {
         public SidAndAttributes Label;
     }

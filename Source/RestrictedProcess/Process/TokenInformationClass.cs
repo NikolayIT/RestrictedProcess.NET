@@ -8,7 +8,7 @@ namespace RestrictedProcess.Process
     /// <summary>
     /// The TOKEN_INFORMATION_CLASS enumeration type contains values that specify the type of information being assigned to or retrieved from an access token.
     /// </summary>
-    public enum TokenInformationClass
+    internal enum TokenInformationClass
     {
         /// <summary>
         /// The buffer receives a TOKEN_USER structure that contains the user account of the token.

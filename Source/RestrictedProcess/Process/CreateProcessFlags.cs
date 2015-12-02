@@ -11,7 +11,7 @@ namespace RestrictedProcess.Process
     /// The following process creation flags are used by the CreateProcess, CreateProcessAsUser, CreateProcessWithLogonW, and CreateProcessWithTokenW functions. They can be specified in any combination, except as noted.
     /// </summary>
     [Flags]
-    public enum CreateProcessFlags
+    internal enum CreateProcessFlags
     {
         /// <summary>
         /// The child processes of a process associated with a job are not associated with the job.
