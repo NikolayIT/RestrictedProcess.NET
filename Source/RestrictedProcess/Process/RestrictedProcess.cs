@@ -1,4 +1,9 @@
-﻿namespace RestrictedProcess.Process
+﻿// <copyright file="RestrictedProcess.cs" company="Nikolay Kostov (Nikolay.IT)">
+// Copyright (c) Nikolay Kostov (Nikolay.IT). All Rights Reserved.
+// Licensed under the Apache License. See LICENSE in the project root for license information.
+// </copyright>
+
+namespace RestrictedProcess.Process
 {
     using System;
     using System.Collections.Generic;
@@ -13,7 +18,7 @@
 
     using Microsoft.Win32.SafeHandles;
 
-    public class RestrictedProcess : IDisposable
+    internal class RestrictedProcess : IDisposable
     {
         private readonly SafeProcessHandle safeProcessHandle;
         private readonly string fileName = string.Empty;
@@ -137,7 +142,7 @@
         public string ExitCodeAsString => new Win32Exception(this.ExitCode).Message;
 
         /// <summary>
-        /// Returns the time the process was started.
+        /// Gets the time the process was started.
         /// </summary>
         public DateTime StartTime => this.GetProcessTimes().StartTime;
 
@@ -147,21 +152,22 @@
         public DateTime ExitTime => this.GetProcessTimes().ExitTime;
 
         /// <summary>
-        /// Returns the amount of time the process has spent running code inside the operating system core.
+        /// Gets the amount of time the process has spent running code inside the operating system core.
         /// </summary>
         public TimeSpan PrivilegedProcessorTime => this.GetProcessTimes().PrivilegedProcessorTime;
 
         /// <summary>
-        /// Returns the amount of time the associated process has spent running code inside the application portion of the process (not the operating system core).
+        /// Gets the amount of time the associated process has spent running code inside the application portion of the process (not the operating system core).
         /// </summary>
         public TimeSpan UserProcessorTime => this.GetProcessTimes().UserProcessorTime;
 
         /// <summary>
-        /// Returns the amount of time the associated process has spent utilizing the CPU.
+        /// Gets the amount of time the associated process has spent utilizing the CPU.
         /// </summary>
         public TimeSpan TotalProcessorTime => this.GetProcessTimes().TotalProcessorTime;
 
         /// <summary>
+        /// Gets the name of the process.
         /// Warning: If two processes with the same name are created, this property may not return correct name!
         /// </summary>
         public string Name

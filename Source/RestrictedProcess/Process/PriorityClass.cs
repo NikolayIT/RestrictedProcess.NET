@@ -1,9 +1,14 @@
-﻿namespace RestrictedProcess.Process
+﻿// <copyright file="PriorityClass.cs" company="Nikolay Kostov (Nikolay.IT)">
+// Copyright (c) Nikolay Kostov (Nikolay.IT). All Rights Reserved.
+// Licensed under the Apache License. See LICENSE in the project root for license information.
+// </copyright>
+
+namespace RestrictedProcess.Process
 {
     using System;
 
     [Flags]
-    public enum PriorityClass
+    internal enum PriorityClass
     {
         /// <summary>
         /// Process that has priority above NORMAL_PRIORITY_CLASS but below HIGH_PRIORITY_CLASS.

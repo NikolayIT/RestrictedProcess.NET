@@ -1,4 +1,9 @@
-﻿namespace RestrictedProcess.JobObjects
+﻿// <copyright file="BasicLimitInformation.cs" company="Nikolay Kostov (Nikolay.IT)">
+// Copyright (c) Nikolay Kostov (Nikolay.IT). All Rights Reserved.
+// Licensed under the Apache License. See LICENSE in the project root for license information.
+// </copyright>
+
+namespace RestrictedProcess.JobObjects
 {
     using System;
     using System.Runtime.InteropServices;
@@ -11,7 +16,7 @@
     /// The system increments the active process count when you attempt to associate a process with a job. If the limit is exceeded, the system decrements the active process count only when the process terminates and all handles to the process are closed. Therefore, if you have an open handle to a process that has been terminated in such a manner, you cannot associate any new processes until the handle is closed and the active process count is below the limit.
     /// </remarks>
     [StructLayout(LayoutKind.Sequential)]
-    public struct BasicLimitInformation
+    internal struct BasicLimitInformation
     {
         /// <summary>
         /// If LimitFlags specifies JOB_OBJECT_LIMIT_PROCESS_TIME, this member is the per-process user-mode execution time limit, in 100-nanosecond ticks. Otherwise, this member is ignored.

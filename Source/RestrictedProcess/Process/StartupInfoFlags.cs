@@ -1,6 +1,11 @@
-﻿namespace RestrictedProcess.Process
+﻿// <copyright file="StartupInfoFlags.cs" company="Nikolay Kostov (Nikolay.IT)">
+// Copyright (c) Nikolay Kostov (Nikolay.IT). All Rights Reserved.
+// Licensed under the Apache License. See LICENSE in the project root for license information.
+// </copyright>
+
+namespace RestrictedProcess.Process
 {
-    public enum StartupInfoFlags
+    internal enum StartupInfoFlags
     {
         /// <summary>
         /// Indicates that the cursor is in feedback mode for two seconds after CreateProcess is called. The Working in Background cursor is displayed (see the Pointers tab in the Mouse control panel utility).

@@ -1,4 +1,9 @@
-﻿namespace RestrictedProcess.Process
+﻿// <copyright file="NativeMethods.cs" company="Nikolay Kostov (Nikolay.IT)">
+// Copyright (c) Nikolay Kostov (Nikolay.IT). All Rights Reserved.
+// Licensed under the Apache License. See LICENSE in the project root for license information.
+// </copyright>
+
+namespace RestrictedProcess.Process
 {
     using System;
     using System.Diagnostics.CodeAnalysis;
@@ -8,7 +13,7 @@
 
     using Microsoft.Win32.SafeHandles;
 
-    public static class NativeMethods
+    internal static class NativeMethods
     {
         public const int SYNCHRONIZE = 0x00100000;
         public const int PROCESS_TERMINATE = 0x0001;

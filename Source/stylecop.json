@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/DotNetAnalyzers/StyleCopAnalyzers/master/StyleCop.Analyzers/StyleCop.Analyzers/Settings/stylecop.schema.json",
+  "settings": {
+    "layoutRules": {
+      "newlineAtEndOfFile": "require"
+    },
+    "namingRules": {
+      "allowCommonHungarianPrefixes": true
+    },
+    "documentationRules": {
+      "companyName": "Nikolay Kostov (Nikolay.IT)",
+      "copyrightText": "Copyright (c) {companyName}. All Rights Reserved.\r\nLicensed under the Apache License. See LICENSE in the project root for license information."
+    }
+  }
+}

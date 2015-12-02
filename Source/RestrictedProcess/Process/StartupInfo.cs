@@ -1,4 +1,9 @@
-﻿namespace RestrictedProcess.Process
+﻿// <copyright file="StartupInfo.cs" company="Nikolay Kostov (Nikolay.IT)">
+// Copyright (c) Nikolay Kostov (Nikolay.IT). All Rights Reserved.
+// Licensed under the Apache License. See LICENSE in the project root for license information.
+// </copyright>
+
+namespace RestrictedProcess.Process
 {
     using System;
     using System.Diagnostics.CodeAnalysis;
@@ -11,7 +16,7 @@
     /// </summary>
     [SuppressMessage("StyleCop.CSharp.MaintainabilityRules", "SA1401:FieldsMustBePrivate", Justification = "Reviewed. Suppression is OK here.")]
     [StructLayout(LayoutKind.Sequential)]
-    public class StartupInfo
+    internal class StartupInfo
     {
         public int SizeInBytes;
 
