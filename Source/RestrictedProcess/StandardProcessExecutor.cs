@@ -47,9 +47,10 @@ namespace RestrictedProcess
             {
                 if (process == null)
                 {
-                    var errorMessage = string.Format("Could not start process: {0}!", fileName);
-                    throw new Exception(errorMessage);
+                    throw new Exception($"Could not start process: {fileName}!");
                 }
+
+                process.PriorityClass = ProcessPriorityClass.High;
 
                 // Write to standard input using another thread
                 process.StandardInput.WriteLineAsync(inputData).ContinueWith(
@@ -86,6 +87,12 @@ namespace RestrictedProcess
                         while (true)
                         {
                             // ReSharper disable once AccessToDisposedClosure
+                            if (process.HasExited)
+                            {
+                                return;
+                            }
+
+                            // ReSharper disable once AccessToDisposedClosure
                             var peakWorkingSetSize = process.PeakWorkingSet64;
 
                             result.MemoryUsed = Math.Max(result.MemoryUsed, peakWorkingSetSize);
@@ -105,7 +112,15 @@ namespace RestrictedProcess
                 var exited = process.WaitForExit((int)(timeLimit * 1.5));
                 if (!exited)
                 {
-                    process.Kill();
+                    // Double check if the process has exited before killing it
+                    if (!process.HasExited)
+                    {
+                        process.Kill();
+
+                        // Approach: https://msdn.microsoft.com/en-us/library/system.diagnostics.process.kill(v=vs.110).aspx#Anchor_2
+                        process.WaitForExit();
+                    }
+
                     result.Type = ProcessExecutionResultType.TimeLimit;
                 }
 
