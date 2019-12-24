@@ -105,6 +105,6 @@ namespace RestrictedProcess.Process
         /// The process inherits its parent's affinity. If the parent process has threads in more than one processor group, the new process inherits the group-relative affinity of an arbitrary group in use by the parent.
         /// Windows Server 2008, Windows Vista, Windows Server 2003, and Windows XP:  This value is not supported.
         /// </summary>
-        INHERIT_PARENT_AFFINITY = 0x00010000
+        INHERIT_PARENT_AFFINITY = 0x00010000,
     }
 }

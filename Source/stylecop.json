@@ -5,11 +5,19 @@
       "newlineAtEndOfFile": "require"
     },
     "namingRules": {
-      "allowCommonHungarianPrefixes": true
+      "allowCommonHungarianPrefixes": true,
+      "allowedHungarianPrefixes": ["ui"]
     },
     "documentationRules": {
       "companyName": "Nikolay Kostov (Nikolay.IT)",
-      "copyrightText": "Copyright (c) {companyName}. All Rights Reserved.\r\nLicensed under the Apache License. See LICENSE in the project root for license information."
+      "copyrightText": "Copyright (c) {companyName}. All Rights Reserved.\r\nLicensed under the Apache License. See LICENSE in the project root for license information.",
+      "documentInterfaces": false,
+      "documentInternalElements": false
+    },
+    "orderingRules": {
+      "usingDirectivesPlacement": "insideNamespace",
+      "systemUsingDirectivesFirst": true,
+      "blankLinesBetweenUsingGroups": "require"
     }
   }
 }

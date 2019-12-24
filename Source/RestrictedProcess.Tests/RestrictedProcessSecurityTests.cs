@@ -5,12 +5,11 @@
     using System.Linq;
     using System.Windows.Forms;
 
-    using NUnit.Framework;
+    using Xunit;
 
-    [TestFixture]
     public class RestrictedProcessSecurityTests : BaseExecutorsTestClass
     {
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldNotBeAbleToCreateFiles()
         {
             const string CreateFileSourceCode = @"using System;
@@ -27,12 +26,11 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, string.Empty, 1000, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
+            Assert.NotNull(result);
+            Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
         }
 
-        [Test]
-        [Ignore("System.Threading.ThreadStateException : Current thread must be set to single thread apartment (STA) mode before OLE calls can be made. Ensure that your Main function has STAThreadAttribute marked on it.")]
+        [Fact(Skip = "System.Threading.ThreadStateException : Current thread must be set to single thread apartment (STA) mode before OLE calls can be made. Ensure that your Main function has STAThreadAttribute marked on it.")]
         [STAThread]
         public void RestrictedProcessShouldNotBeAbleToReadClipboard()
         {
@@ -54,11 +52,11 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
+            Assert.NotNull(result);
+            Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldNotBeAbleToWriteToClipboard()
         {
             const string WriteToClipboardSourceCode = @"using System;
@@ -75,12 +73,12 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
-            Assert.AreNotEqual("i did it", Clipboard.GetText());
+            Assert.NotNull(result);
+            Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
+            Assert.NotEqual("i did it", Clipboard.GetText());
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldNotBeAbleToStartProcess()
         {
             const string StartNotepadProcessSourceCode = @"using System;
@@ -100,9 +98,9 @@ class Program
 
             var notepadsAfter = Process.GetProcessesByName("notepad.exe").Count();
 
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
-            Assert.AreEqual(notepadsBefore, notepadsAfter);
+            Assert.NotNull(result);
+            Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
+            Assert.Equal(notepadsBefore, notepadsAfter);
         }
     }
 }

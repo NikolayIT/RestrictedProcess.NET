@@ -35,8 +35,8 @@ namespace RestrictedProcess.JobObjects
                     ReadTransferCount = 0,
                     ReadOperationCount = 0,
                     WriteOperationCount = 0,
-                    WriteTransferCount = 0
-                }
+                    WriteTransferCount = 0,
+                },
             };
 
             return extendedInfo;
@@ -54,7 +54,7 @@ namespace RestrictedProcess.JobObjects
                                             | UiRestrictionFlags.JOB_OBJECT_UILIMIT_HANDLES
                                             | UiRestrictionFlags.JOB_OBJECT_UILIMIT_READCLIPBOARD
                                             | UiRestrictionFlags.JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
-                                            | UiRestrictionFlags.JOB_OBJECT_UILIMIT_WRITECLIPBOARD)
+                                            | UiRestrictionFlags.JOB_OBJECT_UILIMIT_WRITECLIPBOARD),
                                    };
 
             return restrictions;
