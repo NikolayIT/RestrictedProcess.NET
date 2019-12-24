@@ -277,7 +277,7 @@ namespace RestrictedProcess.Process
 
             this.StandardInput = new StreamWriter(new FileStream(standardInputWritePipeHandle, FileAccess.Write, bufferSize, false), Encoding.Default, bufferSize)
                                      {
-                                         AutoFlush = true
+                                         AutoFlush = true,
                                      };
             this.StandardOutput = new StreamReader(new FileStream(standardOutputReadPipeHandle, FileAccess.Read, bufferSize, false), Encoding.Default, true, bufferSize);
             this.StandardError = new StreamReader(new FileStream(standardErrorReadPipeHandle, FileAccess.Read, 4096, false), Encoding.Default, true, 4096);

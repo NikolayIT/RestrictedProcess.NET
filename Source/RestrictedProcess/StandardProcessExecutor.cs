@@ -40,7 +40,7 @@ namespace RestrictedProcess
                 RedirectStandardError = true,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
-                WorkingDirectory = workingDirectory
+                WorkingDirectory = workingDirectory,
             };
 
             using (var process = System.Diagnostics.Process.Start(processStartInfo))

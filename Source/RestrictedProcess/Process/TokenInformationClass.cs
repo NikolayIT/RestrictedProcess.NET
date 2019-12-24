@@ -153,6 +153,6 @@ namespace RestrictedProcess.Process
         /// <summary>
         /// The maximum value for this enumeration
         /// </summary>
-        MaxTokenInfoClass
+        MaxTokenInfoClass,
     }
 }

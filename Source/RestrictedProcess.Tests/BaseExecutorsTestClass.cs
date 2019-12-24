@@ -6,7 +6,7 @@
 
     using Microsoft.CSharp;
 
-    using NUnit.Framework;
+    using Xunit;
 
     public abstract class BaseExecutorsTestClass
     {
@@ -35,7 +35,7 @@
                 Console.WriteLine(error.ToString());
             }
 
-            Assert.IsFalse(results.Errors.HasErrors, "Code compilation contains errors!");
+            Assert.False(results.Errors.HasErrors, "Code compilation contains errors!");
             return outputExePath;
         }
     }

@@ -2,9 +2,8 @@
 {
     using System;
 
-    using NUnit.Framework;
+    using Xunit;
 
-    [TestFixture]
     public class RestrictedProcessTests : BaseExecutorsTestClass
     {
         private const string ReadInputAndThenOutputSourceCode = @"using System;
@@ -32,7 +31,7 @@ class Program
     }
 }";
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldStopProgramAfterTimeIsEnded()
         {
             const string TimeLimitSourceCode = @"using System;
@@ -49,11 +48,11 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, string.Empty, 100, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.Type == ProcessExecutionResultType.TimeLimit);
+            Assert.NotNull(result);
+            Assert.True(result.Type == ProcessExecutionResultType.TimeLimit);
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldSendInputDataToProcess()
         {
             var exePath = this.CreateExe("RestrictedProcessShouldSendInputDataToProcess.exe", ReadInputAndThenOutputSourceCode);
@@ -62,11 +61,11 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, InputData, 2000, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.AreEqual(InputData.Trim(), result.ReceivedOutput.Trim());
+            Assert.NotNull(result);
+            Assert.Equal(InputData.Trim(), result.ReceivedOutput.Trim());
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldWorkWithCyrillic()
         {
             var exePath = this.CreateExe("RestrictedProcessShouldWorkWithCyrillic.exe", ReadInputAndThenOutputSourceCode);
@@ -75,11 +74,11 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, InputData, 2000, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.AreEqual(InputData.Trim(), result.ReceivedOutput.Trim());
+            Assert.NotNull(result);
+            Assert.Equal(InputData.Trim(), result.ReceivedOutput.Trim());
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldOutputProperLengthForCyrillicText()
         {
             const string ReadInputAndThenOutputTheLengthSourceCode = @"using System;
@@ -97,11 +96,11 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, InputData, 2000, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.AreEqual("7", result.ReceivedOutput.Trim());
+            Assert.NotNull(result);
+            Assert.Equal("7", result.ReceivedOutput.Trim());
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldReceiveCyrillicText()
         {
             const string ReadInputAndThenCheckTheTextToContainCyrillicLettersSourceCode = @"using System;
@@ -119,11 +118,11 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, InputData, 2000, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.AreEqual("True", result.ReceivedOutput.Trim());
+            Assert.NotNull(result);
+            Assert.Equal("True", result.ReceivedOutput.Trim());
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldNotBlockWhenEnterEndlessLoop()
         {
             const string EndlessLoopSourceCode = @"using System;
@@ -139,11 +138,11 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, string.Empty, 50, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.Type == ProcessExecutionResultType.TimeLimit);
+            Assert.NotNull(result);
+            Assert.True(result.Type == ProcessExecutionResultType.TimeLimit);
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessStandardErrorContentShouldContainExceptions()
         {
             const string ThrowExceptionSourceCode = @"using System;
@@ -160,12 +159,12 @@ class Program
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, string.Empty, 500, 32 * 1024 * 1024);
 
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
-            Assert.IsTrue(result.ErrorOutput.Contains("Exception message!"));
+            Assert.NotNull(result);
+            Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
+            Assert.Contains("Exception message!", result.ErrorOutput);
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldReturnCorrectAmountOfUsedMemory()
         {
             var exePath = this.CreateExe("RestrictedProcessShouldReturnCorrectAmountOfUsedMemory.exe", Consuming50MbOfMemorySourceCode);
@@ -175,11 +174,11 @@ class Program
 
             Console.WriteLine(result.MemoryUsed);
 
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.MemoryUsed > 50 * 1024 * 1024);
+            Assert.NotNull(result);
+            Assert.True(result.MemoryUsed > 50 * 1024 * 1024);
         }
 
-        [Test]
+        [Fact]
         public void RestrictedProcessShouldReturnMemoryLimitWhenNeeded()
         {
             var exePath = this.CreateExe("RestrictedProcessShouldReturnMemoryLimitWhenNeeded.exe", Consuming50MbOfMemorySourceCode);
@@ -189,8 +188,8 @@ class Program
 
             Console.WriteLine(result.MemoryUsed);
 
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.Type == ProcessExecutionResultType.MemoryLimit);
+            Assert.NotNull(result);
+            Assert.True(result.Type == ProcessExecutionResultType.MemoryLimit);
         }
     }
 }
