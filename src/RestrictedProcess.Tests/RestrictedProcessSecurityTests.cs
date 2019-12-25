@@ -1,6 +1,5 @@
 ﻿namespace RestrictedProcess.Tests
 {
-    using System;
     using System.Diagnostics;
     using System.Linq;
     using System.Windows.Forms;
@@ -30,8 +29,7 @@ class Program
             Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
         }
 
-        [Fact(Skip = "System.Threading.ThreadStateException : Current thread must be set to single thread apartment (STA) mode before OLE calls can be made. Ensure that your Main function has STAThreadAttribute marked on it.")]
-        [STAThread]
+        [StaFact]
         public void RestrictedProcessShouldNotBeAbleToReadClipboard()
         {
             const string ReadClipboardSourceCode = @"using System;
