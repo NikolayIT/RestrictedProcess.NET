@@ -6,7 +6,7 @@
 
 A small .NET library for running untrusted Windows executables in a sandbox with restricted rights, while enforcing time and memory limits. Ideal for scenarios like online judges, code grading systems, or any situation where you need to execute code you don't trust.
 
-> **Windows only.** The library targets .NET Standard 2.0, but it is built on Win32 APIs (restricted tokens, job objects, `CreateProcessAsUser`), so it works exclusively on Windows.
+> **Windows only.** The library targets .NET Standard 2.0, .NET 8 and .NET 10, but it is built on Win32 APIs (restricted tokens, job objects, `CreateProcessAsUser`), so it works exclusively on Windows.
 
 ## Installation
 
@@ -37,6 +37,8 @@ Console.WriteLine(result.MemoryUsed);     // peak working set in bytes
 
 If you don't need sandboxing, `StandardProcessExecutor` implements the same `IExecutor` interface using a regular `System.Diagnostics.Process` (time limit only, no memory constraints).
 
+Both executors optionally accept a `Microsoft.Extensions.Logging.ILogger` in their constructor for diagnostic output; without one, logging is a no-op.
+
 ## What the sandbox restricts
 
 The process is started with a restricted token at low integrity level and placed in a Win32 job object, which means it:
@@ -59,7 +61,7 @@ dotnet build src/RestrictedProcess.sln
 dotnet test src/RestrictedProcess.sln
 ```
 
-The tests compile small C# programs at runtime and actually execute them in the sandbox, so they require Windows and .NET Framework 4.6.1.
+The tests compile small C# programs at runtime (via Roslyn, targeting the .NET Framework built into Windows) and actually execute them in the sandbox, so they must be run locally on Windows. They are not run on CI: creating a process with a restricted token fails with "Access is denied" in hosted build environments.
 
 ## History
 
