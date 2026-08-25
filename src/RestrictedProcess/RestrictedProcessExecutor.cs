@@ -20,9 +20,16 @@ namespace RestrictedProcess
     public class RestrictedProcessExecutor : IExecutor
     {
         private readonly ILogger logger;
+        private readonly RestrictedProcessOptions options;
 
         public RestrictedProcessExecutor(ILogger? logger = null)
+            : this(new RestrictedProcessOptions(), logger)
         {
+        }
+
+        public RestrictedProcessExecutor(RestrictedProcessOptions options, ILogger? logger = null)
+        {
+            this.options = options ?? throw new ArgumentNullException(nameof(options));
             this.logger = logger ?? NullLogger.Instance;
         }
 
@@ -32,7 +39,7 @@ namespace RestrictedProcess
             var result = new ProcessExecutionResult { Type = ProcessExecutionResultType.Success };
             var workingDirectory = new FileInfo(fileName).DirectoryName;
 
-            using (var restrictedProcess = new RestrictedProcess(fileName, workingDirectory, executionArguments, Math.Max(4096, (inputData.Length * 2) + 4)))
+            using (var restrictedProcess = new RestrictedProcess(fileName, workingDirectory, executionArguments, Math.Max(4096, (inputData.Length * 2) + 4), options: this.options))
             {
                 // Write to standard input using another thread
                 restrictedProcess.StandardInput.WriteLineAsync(inputData).ContinueWith(

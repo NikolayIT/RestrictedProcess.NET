@@ -50,16 +50,11 @@ namespace RestrictedProcess.Process
             SE_GROUP_USE_FOR_DENY_ONLY | SE_GROUP_LOGON_ID | SE_GROUP_RESOURCE |
             SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED;
 
-        public const int SAFER_SCOPEID_MACHINE = 1;
-        public const int SAFER_SCOPEID_USER = 2;
-
-        public const int SAFER_LEVELID_DISALLOWED = 0x00000;
-        public const int SAFER_LEVELID_UNTRUSTED = 0x1000;
-        public const int SAFER_LEVELID_CONSTRAINED = 0x10000;
-        public const int SAFER_LEVELID_NORMALUSER = 0x20000;
-        public const int SAFER_LEVELID_FULLYTRUSTED = 0x40000;
-
-        public const int SAFER_LEVEL_OPEN = 1;
+        // Well-known SIDs used when building the restricted token
+        public const string SID_BUILTIN_ADMINISTRATORS = "S-1-5-32-544";
+        public const string SID_BUILTIN_USERS = "S-1-5-32-545";
+        public const string SID_EVERYONE = "S-1-1-0";
+        public const string SID_RESTRICTED = "S-1-5-12";
 
         [SuppressMessage("StyleCop.CSharp.MaintainabilityRules", "SA1401:FieldsMustBePrivate", Justification = "Reviewed. Suppression is OK here.")]
         public static SidIdentifierAuthority SECURITY_MANDATORY_LABEL_AUTHORITY =
@@ -169,6 +164,26 @@ namespace RestrictedProcess.Process
         internal static extern bool ConvertStringSidToSid(string StringSid, out IntPtr ptrSid);
 
         /// <summary>
+        /// The function retrieves a specified type of information about an access token.
+        /// </summary>
+        /// <param name="tokenHandle">A handle to an access token from which information is retrieved.</param>
+        /// <param name="tokenInformationClass">Specifies the type of information being retrieved.</param>
+        /// <param name="tokenInformation">A pointer to a buffer the function fills with the requested information.</param>
+        /// <param name="tokenInformationLength">Specifies the size, in bytes, of the buffer.</param>
+        /// <param name="returnLength">Outputs the number of bytes needed for the buffer.</param>
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetTokenInformation(
+            IntPtr tokenHandle,
+            TokenInformationClass tokenInformationClass,
+            IntPtr tokenInformation,
+            int tokenInformationLength,
+            out int returnLength);
+
+        [DllImport("advapi32.dll")]
+        internal static extern IntPtr FreeSid(IntPtr pSid);
+
+        /// <summary>
         /// The function sets various types of information for a specified
         /// access token. The information that this function sets replaces
         /// existing information. The calling process must have appropriate
@@ -242,15 +257,6 @@ namespace RestrictedProcess.Process
         [DllImport("psapi.dll", EntryPoint = "GetProcessMemoryInfo")]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool GetProcessMemoryInfo([In] IntPtr Process, [Out] out ProcessMemoryCounters ppsmemCounters, uint cb);
-
-        [DllImport("advapi32.dll", SetLastError = true)]
-        internal static extern bool SaferCloseLevel(IntPtr hLevelHandle);
-
-        [DllImport("advapi32.dll", SetLastError = true)]
-        internal static extern bool SaferCreateLevel(int dwScopeId, int dwLevelId, int OpenFlags, out IntPtr pLevelHandle, IntPtr lpReserved);
-
-        [DllImport("advapi32.dll", SetLastError = true)]
-        internal static extern bool SaferComputeTokenFromLevel(IntPtr LevelHandle, IntPtr InAccessToken, out IntPtr OutAccessToken, int dwFlags, IntPtr lpReserved);
 
         [DllImport("kernel32.dll", ExactSpelling = true, CharSet = CharSet.Auto, SetLastError = true)]
         internal static extern bool CloseHandle(IntPtr handle);

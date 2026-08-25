@@ -21,14 +21,16 @@ namespace RestrictedProcess.Process
     {
         private readonly SafeProcessHandle safeProcessHandle;
         private readonly string fileName = string.Empty;
+        private readonly RestrictedProcessOptions options;
         private ProcessInformation processInformation;
         private JobObject? jobObject;
         private int exitCode;
 
-        public RestrictedProcess(string fileName, string? workingDirectory, IEnumerable<string>? arguments = null, int bufferSize = 4096, Encoding? encoding = null)
+        public RestrictedProcess(string fileName, string? workingDirectory, IEnumerable<string>? arguments = null, int bufferSize = 4096, Encoding? encoding = null, RestrictedProcessOptions? options = null)
         {
             // Initialize fields
             this.fileName = fileName;
+            this.options = options ?? new RestrictedProcessOptions();
             this.IsDisposed = false;
 
             // Prepare startup info and redirect standard IO handles
@@ -36,10 +38,10 @@ namespace RestrictedProcess.Process
             this.RedirectStandardIoHandles(ref startupInfo, bufferSize, encoding ?? GetAnsiEncoding());
 
             // Create restricted token
-            var restrictedToken = this.CreateRestrictedToken();
+            var restrictedToken = this.CreateRestrictedToken(this.options.TokenLevel);
 
             // Set mandatory label
-            this.SetTokenMandatoryLabel(restrictedToken, SecurityMandatoryLabel.Low);
+            this.SetTokenMandatoryLabel(restrictedToken, (SecurityMandatoryLabel)this.options.IntegrityLevel);
 
             var processSecurityAttributes = new SecurityAttributes();
             var threadSecurityAttributes = new SecurityAttributes();
@@ -292,6 +294,55 @@ namespace RestrictedProcess.Process
             }
         }
 
+        private static IntPtr ConvertStringSidToSid(string stringSid, List<IntPtr> sidsToFree)
+        {
+            if (!NativeMethods.ConvertStringSidToSid(stringSid, out var sid))
+            {
+                throw new Win32Exception();
+            }
+
+            sidsToFree.Add(sid);
+            return sid;
+        }
+
+        /// <summary>
+        /// Gets the logon SID of the given token (the group carrying the SE_GROUP_LOGON_ID attribute).
+        /// Returns the buffer holding the TOKEN_GROUPS structure the SID points into;
+        /// the caller must free it with <see cref="Marshal.FreeHGlobal"/> after the SID is no longer needed.
+        /// </summary>
+        private static IntPtr GetLogonSid(IntPtr token, out IntPtr logonSid)
+        {
+            logonSid = IntPtr.Zero;
+            NativeMethods.GetTokenInformation(token, TokenInformationClass.TokenGroups, IntPtr.Zero, 0, out var length);
+            if (length == 0)
+            {
+                return IntPtr.Zero;
+            }
+
+            var buffer = Marshal.AllocHGlobal(length);
+            if (!NativeMethods.GetTokenInformation(token, TokenInformationClass.TokenGroups, buffer, length, out length))
+            {
+                Marshal.FreeHGlobal(buffer);
+                throw new Win32Exception();
+            }
+
+            // TOKEN_GROUPS layout: DWORD GroupCount (padded to pointer size), then SID_AND_ATTRIBUTES[GroupCount]
+            var groupCount = Marshal.ReadInt32(buffer);
+            var sizeOfEntry = Marshal.SizeOf<SidAndAttributes>();
+            for (var i = 0; i < groupCount; i++)
+            {
+                var entry = Marshal.PtrToStructure<SidAndAttributes>(buffer + IntPtr.Size + (i * sizeOfEntry));
+                if ((entry.Attributes & NativeMethods.SE_GROUP_LOGON_ID) == NativeMethods.SE_GROUP_LOGON_ID)
+                {
+                    logonSid = entry.Sid;
+                    return buffer;
+                }
+            }
+
+            Marshal.FreeHGlobal(buffer);
+            return IntPtr.Zero;
+        }
+
         private void RedirectStandardIoHandles(ref StartupInfo startupInfo, int bufferSize, Encoding encoding)
         {
             // Some of this code is based on System.Diagnostics.Process.StartWithCreateProcess method implementation
@@ -387,7 +438,7 @@ namespace RestrictedProcess.Process
             }
         }
 
-        private IntPtr CreateRestrictedToken()
+        private IntPtr CreateRestrictedToken(TokenLevel tokenLevel)
         {
             // Open the current process and grab its primary token
             IntPtr processToken;
@@ -399,52 +450,78 @@ namespace RestrictedProcess.Process
                 throw new Win32Exception();
             }
 
-            // Create the restricted token for the process
-            IntPtr restrictedToken;
-            if (!NativeMethods.CreateRestrictedToken(
-                    processToken,
-                    CreateRestrictedTokenFlags.SANDBOX_INERT, // TODO: DISABLE_MAX_PRIVILEGE ??
-                    0, // Disable SID
-                    null,
-                    0, // Delete privilege
-                    null,
-                    0, // Restricted SID
-                    null,
-                    out restrictedToken))
+            var sidsToFree = new List<IntPtr>();
+            var logonSidBuffer = IntPtr.Zero;
+            try
             {
-                throw new Win32Exception();
+                // Remove all privileges except SeChangeNotifyPrivilege and convert the
+                // Administrators group to deny-only, so a sandbox running in an elevated
+                // host cannot use administrative rights.
+                var flags = tokenLevel == TokenLevel.Unrestricted
+                    ? default(CreateRestrictedTokenFlags)
+                    : CreateRestrictedTokenFlags.DISABLE_MAX_PRIVILEGE;
+
+                SidAndAttributes[]? sidsToDisable = null;
+                if (tokenLevel >= TokenLevel.Limited)
+                {
+                    sidsToDisable = new[]
+                    {
+                        new SidAndAttributes { Sid = ConvertStringSidToSid(NativeMethods.SID_BUILTIN_ADMINISTRATORS, sidsToFree) },
+                    };
+                }
+
+                // Restricting SIDs add a second access check evaluated only against this list,
+                // mirroring the Chromium sandbox USER_LIMITED token level.
+                SidAndAttributes[]? sidsToRestrict = null;
+                if (tokenLevel >= TokenLevel.Restricted)
+                {
+                    var restrictedSids = new List<SidAndAttributes>
+                    {
+                        new SidAndAttributes { Sid = ConvertStringSidToSid(NativeMethods.SID_EVERYONE, sidsToFree) },
+                        new SidAndAttributes { Sid = ConvertStringSidToSid(NativeMethods.SID_BUILTIN_USERS, sidsToFree) },
+                        new SidAndAttributes { Sid = ConvertStringSidToSid(NativeMethods.SID_RESTRICTED, sidsToFree) },
+                    };
+
+                    logonSidBuffer = GetLogonSid(processToken, out var logonSid);
+                    if (logonSid != IntPtr.Zero)
+                    {
+                        restrictedSids.Add(new SidAndAttributes { Sid = logonSid });
+                    }
+
+                    sidsToRestrict = restrictedSids.ToArray();
+                }
+
+                IntPtr restrictedToken;
+                if (!NativeMethods.CreateRestrictedToken(
+                        processToken,
+                        flags,
+                        sidsToDisable?.Length ?? 0,
+                        sidsToDisable,
+                        0, // Delete privilege (superseded by DISABLE_MAX_PRIVILEGE)
+                        null,
+                        sidsToRestrict?.Length ?? 0,
+                        sidsToRestrict,
+                        out restrictedToken))
+                {
+                    throw new Win32Exception();
+                }
+
+                return restrictedToken;
             }
-
-            // Clean up our mess
-            NativeMethods.CloseHandle(processToken);
-
-            return restrictedToken;
-        }
-
-        private IntPtr CreateRestrictedTokenWithSafer()
-        {
-            IntPtr saferLevel;
-            IntPtr token;
-
-            if (!NativeMethods.SaferCreateLevel(
-                    NativeMethods.SAFER_SCOPEID_USER,
-                    NativeMethods.SAFER_LEVELID_CONSTRAINED,
-                    NativeMethods.SAFER_LEVEL_OPEN,
-                    out saferLevel,
-                    IntPtr.Zero))
+            finally
             {
-                throw new Win32Exception();
+                foreach (var sid in sidsToFree)
+                {
+                    NativeMethods.LocalFree(sid);
+                }
+
+                if (logonSidBuffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(logonSidBuffer);
+                }
+
+                NativeMethods.CloseHandle(processToken);
             }
-
-            if (!NativeMethods.SaferComputeTokenFromLevel(saferLevel, IntPtr.Zero, out token, 0, IntPtr.Zero))
-            {
-                NativeMethods.SaferCloseLevel(saferLevel);
-                throw new Win32Exception();
-            }
-
-            NativeMethods.SaferCloseLevel(saferLevel);
-
-            return token;
         }
 
         private void SetTokenMandatoryLabel(IntPtr token, SecurityMandatoryLabel securityMandatoryLabel)
@@ -467,26 +544,36 @@ namespace RestrictedProcess.Process
                 throw new Win32Exception();
             }
 
-            var tokenMandatoryLabel = new TokenMandatoryLabel { Label = default(SidAndAttributes) };
-            tokenMandatoryLabel.Label.Attributes = NativeMethods.SE_GROUP_INTEGRITY;
-            tokenMandatoryLabel.Label.Sid = integritySid;
-            //// Marshal the TOKEN_MANDATORY_LABEL structure to the native memory.
-            var sizeOfTokenMandatoryLabel = Marshal.SizeOf(tokenMandatoryLabel);
-            var tokenInfo = Marshal.AllocHGlobal(sizeOfTokenMandatoryLabel);
-            Marshal.StructureToPtr(tokenMandatoryLabel, tokenInfo, false);
-
-            // Set the integrity level in the access token
-            if (!NativeMethods.SetTokenInformation(
-                    token,
-                    TokenInformationClass.TokenIntegrityLevel,
-                    tokenInfo,
-                    sizeOfTokenMandatoryLabel + NativeMethods.GetLengthSid(integritySid)))
+            var tokenInfo = IntPtr.Zero;
+            try
             {
-                throw new Win32Exception();
-            }
+                var tokenMandatoryLabel = new TokenMandatoryLabel { Label = default(SidAndAttributes) };
+                tokenMandatoryLabel.Label.Attributes = NativeMethods.SE_GROUP_INTEGRITY;
+                tokenMandatoryLabel.Label.Sid = integritySid;
+                //// Marshal the TOKEN_MANDATORY_LABEL structure to the native memory.
+                var sizeOfTokenMandatoryLabel = Marshal.SizeOf(tokenMandatoryLabel);
+                tokenInfo = Marshal.AllocHGlobal(sizeOfTokenMandatoryLabel);
+                Marshal.StructureToPtr(tokenMandatoryLabel, tokenInfo, false);
 
-            //// SafeNativeMethods.CloseHandle(integritySid);
-            //// SafeNativeMethods.CloseHandle(tokenInfo);
+                // Set the integrity level in the access token
+                if (!NativeMethods.SetTokenInformation(
+                        token,
+                        TokenInformationClass.TokenIntegrityLevel,
+                        tokenInfo,
+                        sizeOfTokenMandatoryLabel + NativeMethods.GetLengthSid(integritySid)))
+                {
+                    throw new Win32Exception();
+                }
+            }
+            finally
+            {
+                if (tokenInfo != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(tokenInfo);
+                }
+
+                NativeMethods.FreeSid(integritySid);
+            }
         }
 
         private ProcessThreadTimes GetProcessTimes()
