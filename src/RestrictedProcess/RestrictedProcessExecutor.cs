@@ -160,7 +160,8 @@ namespace RestrictedProcess
             result.ErrorTruncated = errorTruncated;
             result.MemoryUsed = this.SelectMemoryMetric(result);
 
-            this.Classify(request, result, deadlineReached, cancelled, diskWriteExceeded);
+            ExecutionResultClassifier.Classify(
+                result, request, this.options, deadlineReached, cancelled, diskWriteExceeded);
             return result;
         }
 
@@ -354,62 +355,6 @@ namespace RestrictedProcess
                     return Math.Max(result.PeakCommitBytes, result.PeakWorkingSetBytes);
                 default:
                     return result.PeakCommitBytes;
-            }
-        }
-
-        /// <summary>
-        /// Decides the verdict. The order matters and is deliberately the same as previous versions:
-        /// a time limit outranks everything, a memory limit outranks a runtime error, and flooding output
-        /// outranks both success and a runtime error.
-        /// </summary>
-        private void Classify(
-            ExecutionRequest request,
-            ProcessExecutionResult result,
-            bool deadlineReached,
-            bool cancelled,
-            bool diskWriteExceeded)
-        {
-            if (cancelled)
-            {
-                result.Type = ProcessExecutionResultType.Cancelled;
-                return;
-            }
-
-            if (deadlineReached
-                || (request.CpuTimeLimit.HasValue && result.TotalProcessorTime > request.CpuTimeLimit.Value))
-            {
-                result.Type = ProcessExecutionResultType.TimeLimit;
-            }
-
-            if (!string.IsNullOrEmpty(result.ErrorOutput))
-            {
-                result.Type = ProcessExecutionResultType.RunTimeError;
-            }
-
-            if (request.MemoryLimitBytes.HasValue && result.MemoryUsed > request.MemoryLimitBytes.Value)
-            {
-                result.Type = ProcessExecutionResultType.MemoryLimit;
-            }
-
-            if (this.options.TreatNonZeroExitCodeAsRunTimeError
-                && result.ExitCode != 0
-                && result.Type == ProcessExecutionResultType.Success)
-            {
-                result.Type = ProcessExecutionResultType.RunTimeError;
-            }
-
-            // OutputLimit covers a program that produced too much, whether down a pipe or onto disk. The
-            // disk side is checked twice: the job's notification fires while the program is still running
-            // and stops it early where the OS supports it, and the accumulated counter is compared
-            // afterwards so the verdict is right even where the notification never arrives.
-            var wroteTooMuch = diskWriteExceeded
-                               || (this.options.MaxDiskWriteBytes.HasValue
-                                   && result.IoStatistics.WriteBytes > (ulong)this.options.MaxDiskWriteBytes.Value);
-
-            if ((result.OutputTruncated || result.ErrorTruncated || wroteTooMuch)
-                && (result.Type == ProcessExecutionResultType.Success || result.Type == ProcessExecutionResultType.RunTimeError))
-            {
-                result.Type = ProcessExecutionResultType.OutputLimit;
             }
         }
     }

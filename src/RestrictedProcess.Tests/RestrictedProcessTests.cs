@@ -8,6 +8,10 @@
 
     public class RestrictedProcessTests : BaseExecutorsTestClass
     {
+        private const string CodePageSkipReason =
+            "The system ANSI code page cannot represent this text, so the child writes question marks before "
+            + "the sandbox sees the bytes. Pin RestrictedProcessOptions.Encoding instead.";
+
         private const string ReadInputAndThenOutputSourceCode = @"using System;
 class Program
 {
@@ -73,10 +77,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldWorkWithCyrillic.exe", ReadInputAndThenOutputSourceCode);
 
             const string InputData = "Николай\n";
-            Assert.SkipUnless(
-                AnsiCodePageCanRepresent(InputData),
-                "The system ANSI code page cannot represent this text, so the child writes question marks "
-                + "before the sandbox sees the bytes. Pin RestrictedProcessOptions.Encoding instead.");
+            Assert.SkipUnless(AnsiCodePageCanRepresent(InputData), CodePageSkipReason);
 
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));
@@ -100,10 +101,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldOutputProperLengthForCyrillicText.exe", ReadInputAndThenOutputTheLengthSourceCode);
 
             const string InputData = "Николай\n";
-            Assert.SkipUnless(
-                AnsiCodePageCanRepresent(InputData),
-                "The system ANSI code page cannot represent this text, so the child writes question marks "
-                + "before the sandbox sees the bytes. Pin RestrictedProcessOptions.Encoding instead.");
+            Assert.SkipUnless(AnsiCodePageCanRepresent(InputData), CodePageSkipReason);
 
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));
@@ -127,10 +125,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldReceiveCyrillicText.exe", ReadInputAndThenCheckTheTextToContainCyrillicLettersSourceCode);
 
             const string InputData = "абвгдежзийклмнопрстуфхцчшщъьюя\n";
-            Assert.SkipUnless(
-                AnsiCodePageCanRepresent(InputData),
-                "The system ANSI code page cannot represent this text, so the child writes question marks "
-                + "before the sandbox sees the bytes. Pin RestrictedProcessOptions.Encoding instead.");
+            Assert.SkipUnless(AnsiCodePageCanRepresent(InputData), CodePageSkipReason);
 
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));

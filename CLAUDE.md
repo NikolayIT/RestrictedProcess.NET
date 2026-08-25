@@ -121,9 +121,22 @@ it terminates the job and loses the measurement; the same threshold is a notific
   and by comparing the job's accumulated write counter after the run. A probe confirmed the memory
   notification working - a program allocating 200 MB against a 32 MB limit is killed after ~450 ms with a
   peak commit of 33 MB, rather than running to completion.
+- **`StandardProcessExecutor` has to sample memory while the process runs.** `Process.PeakWorkingSet64`
+  throws once the process has exited, so reading the counters after the wait always produced zero. The
+  sandboxed path needs no sampler because the job object keeps the peak after every process in it is gone.
+  Its output cap also has to kill the program, or a flooding program runs to the wall-clock deadline and is
+  reported as a time limit instead of an output limit.
 - `TokenLevel.StrictlyRestricted` and `TokenLevel.Lockdown` **cannot start a managed executable** — the
   process exits with `STATUS_ACCESS_DENIED` before its entry point. This is asserted by a test so the
   documentation cannot drift.
+
+### Verdict precedence lives in one place
+
+`ExecutionResultClassifier` decides `ProcessExecutionResultType`, and **both** executors call it. They
+each had their own copy and had already drifted: a program that exceeded its processor time limit was
+reported as `RunTimeError` purely because it had printed a warning on standard error, while the memory
+limit already outranked standard error. Resource limits now consistently outrank the standard-error and
+exit-code signals. Do not re-inline this logic.
 
 ## Tests
 
@@ -142,6 +155,14 @@ should use, so a loaded machine cannot turn an assertion into a spurious time li
 - `RestrictedProcessSecurityTests` — the sandbox blocks file creation, clipboard access, process spawning,
   handle inheritance and parent-environment access, and the token / integrity level / mitigations /
   alternate desktop are really applied.
+- `CommandLineTests` — the escaper, round-tripped through the real `CommandLineToArgvW` rather than
+  against hand-written expectations.
+- `ExecutorContractTests` — which limit produces which verdict, standard IO edges (2 MB of input, the exact
+  output cap boundary, a program that never reads its input), repeated and concurrent use of one executor,
+  orphan cleanup, Untrusted integrity, and processor time across a child process tree.
+- `ClassificationTests` — the verdict precedence matrix and the memory metrics.
+- `StandardProcessExecutorTests` — the unsandboxed executor against the same contract, plus the contrast
+  that gives the sandbox its point: the same program writes a file unsandboxed and is refused under it.
 - `SandboxIsolationTests` — what is and is not contained: reads at the default level, the read-containing
   levels being unusable for managed code, `WriteRestricted` writing only where granted (and the grant being
   removed afterwards), the unique per-run SID, exit code 259, spaces and quotes in paths and arguments,

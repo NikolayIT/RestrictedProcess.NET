@@ -103,8 +103,9 @@ namespace RestrictedProcess
                     throw new SandboxException("Could not start " + request.FileName + ".");
                 }
 
-                var outputTask = ReadBoundedAsync(process.StandardOutput, this.options.MaxOutputSize);
-                var errorTask = ReadBoundedAsync(process.StandardError, this.options.MaxErrorSize);
+                using var sampler = new MemorySampler(process);
+                var outputTask = ReadBoundedAsync(process.StandardOutput, this.options.MaxOutputSize, () => Kill(process));
+                var errorTask = ReadBoundedAsync(process.StandardError, this.options.MaxErrorSize, () => Kill(process));
                 var inputTask = WriteInputAsync(process, request.Input);
 
                 var wallClockLimit = this.ResolveWallClockLimit(request);
@@ -141,6 +142,8 @@ namespace RestrictedProcess
 
                 // WaitForExitAsync returns once the process object signals; give the redirected streams the
                 // chance to reach end of file before reading what they captured.
+                sampler.Stop();
+
                 var readers = Task.WhenAll(outputTask, errorTask, inputTask);
                 if (await Task.WhenAny(readers, Task.Delay(this.options.OutputDrainTimeout)).ConfigureAwait(false) != readers)
                 {
@@ -155,9 +158,8 @@ namespace RestrictedProcess
                 result.ErrorOutput = error.Item1;
                 result.ErrorTruncated = error.Item2;
 
-                process.Refresh();
-                result.PeakWorkingSetBytes = SafeRead(() => process.PeakWorkingSet64);
-                result.PeakCommitBytes = SafeRead(() => process.PeakPagedMemorySize64);
+                result.PeakWorkingSetBytes = sampler.PeakWorkingSetBytes;
+                result.PeakCommitBytes = sampler.PeakCommitBytes;
                 result.ExitCode = process.HasExited ? process.ExitCode : -1;
                 result.TimeWorked = process.HasExited ? process.ExitTime - process.StartTime : TimeSpan.Zero;
                 result.UserProcessorTime = SafeRead(() => process.UserProcessorTime);
@@ -168,7 +170,8 @@ namespace RestrictedProcess
                 ? result.PeakWorkingSetBytes
                 : Math.Max(result.PeakCommitBytes, result.PeakWorkingSetBytes);
 
-            this.Classify(request, result, deadlineReached, cancelled);
+            ExecutionResultClassifier.Classify(
+                result, request, this.options, deadlineReached, cancelled, false);
             return result;
         }
 
@@ -205,7 +208,8 @@ namespace RestrictedProcess
             }
         }
 
-        private static async Task<(string Text, bool Truncated)> ReadBoundedAsync(StreamReader reader, long maxCharacters)
+        private static async Task<(string Text, bool Truncated)> ReadBoundedAsync(
+            StreamReader reader, long maxCharacters, Action onTruncated)
         {
             var builder = new StringBuilder();
             var buffer = new char[8192];
@@ -225,6 +229,10 @@ namespace RestrictedProcess
                     {
                         builder.Append(buffer, 0, (int)(maxCharacters - builder.Length));
                         truncated = true;
+
+                        // Without this the program keeps writing into the void until the wall-clock
+                        // deadline, and the run is reported as a time limit rather than an output limit.
+                        onTruncated();
                         continue;
                     }
 
@@ -283,44 +291,6 @@ namespace RestrictedProcess
 
             return TimeSpan.FromMilliseconds(
                 request.CpuTimeLimit.Value.TotalMilliseconds * Math.Max(1.0, this.options.WallClockWaitMultiplier));
-        }
-
-        private void Classify(ExecutionRequest request, ProcessExecutionResult result, bool deadlineReached, bool cancelled)
-        {
-            if (cancelled)
-            {
-                result.Type = ProcessExecutionResultType.Cancelled;
-                return;
-            }
-
-            if (deadlineReached
-                || (request.CpuTimeLimit.HasValue && result.TotalProcessorTime > request.CpuTimeLimit.Value))
-            {
-                result.Type = ProcessExecutionResultType.TimeLimit;
-            }
-
-            if (!string.IsNullOrEmpty(result.ErrorOutput))
-            {
-                result.Type = ProcessExecutionResultType.RunTimeError;
-            }
-
-            if (request.MemoryLimitBytes.HasValue && result.MemoryUsed > request.MemoryLimitBytes.Value)
-            {
-                result.Type = ProcessExecutionResultType.MemoryLimit;
-            }
-
-            if (this.options.TreatNonZeroExitCodeAsRunTimeError
-                && result.ExitCode != 0
-                && result.Type == ProcessExecutionResultType.Success)
-            {
-                result.Type = ProcessExecutionResultType.RunTimeError;
-            }
-
-            if ((result.OutputTruncated || result.ErrorTruncated)
-                && (result.Type == ProcessExecutionResultType.Success || result.Type == ProcessExecutionResultType.RunTimeError))
-            {
-                result.Type = ProcessExecutionResultType.OutputLimit;
-            }
         }
     }
 }
