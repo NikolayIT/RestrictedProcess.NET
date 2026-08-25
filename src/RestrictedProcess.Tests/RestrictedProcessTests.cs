@@ -298,7 +298,7 @@ class Program
     {
         var stopwatch = Stopwatch.StartNew();
         long counter = 0;
-        while (stopwatch.ElapsedMilliseconds < 500)
+        while (stopwatch.ElapsedMilliseconds < 1500)
         {
             counter++;
         }
@@ -309,20 +309,21 @@ class Program
 
             // The CPU rate is a percentage of the whole machine's capacity, so to throttle a single
             // thread the cap must be below one core's share (100 / ProcessorCount). Cap the job to
-            // roughly half a core regardless of the core count.
-            var percent = Math.Max(1, 50 / Environment.ProcessorCount);
-
-            var uncapped = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 3000, 32 * 1024 * 1024);
-            Assert.Equal(ProcessExecutionResultType.Success, uncapped.Type);
+            // roughly 0.4 of a core regardless of the core count.
+            var percent = Math.Max(1, 40 / Environment.ProcessorCount);
 
             var options = new RestrictedProcessOptions { CpuRateLimitPercent = percent };
-            var capped = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 3000, 32 * 1024 * 1024);
-            Assert.Equal(ProcessExecutionResultType.Success, capped.Type);
+            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 5000, 32 * 1024 * 1024);
+            Assert.Equal(ProcessExecutionResultType.Success, result.Type);
 
-            // For the same busy loop the throttled run must burn far less CPU time than the uncapped one.
+            // The hard cap is an absolute upper bound on CPU time regardless of other load: a busy
+            // loop throttled to well under one core must burn far less CPU time than the wall-clock
+            // time it ran for (an unthrottled single thread would be close to 100%).
+            var cpuMilliseconds = result.TotalProcessorTime.TotalMilliseconds;
+            var wallMilliseconds = result.TimeWorked.TotalMilliseconds;
             Assert.True(
-                capped.TotalProcessorTime.TotalMilliseconds < 0.7 * uncapped.TotalProcessorTime.TotalMilliseconds,
-                $"Capped CPU time {capped.TotalProcessorTime.TotalMilliseconds} ms was not throttled below the uncapped {uncapped.TotalProcessorTime.TotalMilliseconds} ms.");
+                cpuMilliseconds < 0.65 * wallMilliseconds,
+                $"CPU time {cpuMilliseconds} ms was not throttled below 65% of wall time {wallMilliseconds} ms.");
         }
     }
 }

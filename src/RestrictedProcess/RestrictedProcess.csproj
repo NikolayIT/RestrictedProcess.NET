@@ -24,7 +24,7 @@
     <Product>RestrictedProcess.NET</Product>
     <PackageProjectUrl>https://github.com/NikolayIT/RestrictedProcess.NET</PackageProjectUrl>
     <Description>A .NET library containing restricted process executor which can be used to run Windows programs with restricted rights. RestrictedProcess.NET can also limit the time and the memory of a running process.</Description>
-    <PackageReleaseNotes>Targeting .NET Standard 2.0, .NET 8 and .NET 10. Replaced log4net with Microsoft.Extensions.Logging.Abstractions.</PackageReleaseNotes>
+    <PackageReleaseNotes>Targeting .NET Standard 2.0, .NET 8 and .NET 10. Replaced log4net with Microsoft.Extensions.Logging.Abstractions. Chromium-sandbox-class hardening (configurable via RestrictedProcessOptions): restricted token levels with dropped privileges, deny-only Administrators and restricting SIDs; inherited-handle whitelist; process mitigation policies; kernel-level child-process ban; scrubbed environment; throwaway desktop; job priority/affinity/CPU-rate limits; and bounded output reads (new OutputLimit result type). Breaking: executor defaults are stricter.</PackageReleaseNotes>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>

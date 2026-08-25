@@ -27,7 +27,7 @@ ProcessExecutionResult result = executor.Execute(
     timeLimit: 1000,                 // milliseconds
     memoryLimit: 32 * 1024 * 1024);  // bytes
 
-Console.WriteLine(result.Type);           // Success, TimeLimit, MemoryLimit or RunTimeError
+Console.WriteLine(result.Type);           // Success, TimeLimit, MemoryLimit, RunTimeError or OutputLimit
 Console.WriteLine(result.ReceivedOutput); // what the process wrote to standard output
 Console.WriteLine(result.ErrorOutput);    // what the process wrote to standard error
 Console.WriteLine(result.ExitCode);
@@ -45,12 +45,41 @@ The process is started with a restricted token at low integrity level and placed
 
 - Cannot create or write files (low integrity level)
 - Cannot read from or write to the clipboard
-- Cannot start other processes (active process limit of 1)
+- Cannot start other processes (kernel-level child-process ban plus an active process limit of 1)
 - Cannot change display settings, exit Windows, or access global atoms and system parameters
+- Cannot use administrative rights even in an elevated host (all privileges are dropped, Administrators becomes deny-only, and restricting SIDs are applied)
+- Cannot see the parent's handles (only its three standard IO pipes are inherited) or the parent's environment variables (it gets a minimal environment block)
+- Runs on a throwaway desktop, so it cannot read or message windows on the interactive desktop
+- Runs with process mitigation policies enabled (DEP, ASLR, strict handle checks, extension-point disable, image-load restrictions)
 - Is killed automatically when the job handle is closed or on an unhandled exception
 - Is limited in the amount of memory it can commit
 
-Time and memory limits are enforced precisely by the executor: the process is killed if it exceeds the wall-clock allowance, its total processor time is compared against the time limit, and its peak working set is sampled continuously and compared against the memory limit.
+Time and memory limits are enforced precisely by the executor: the process is killed if it exceeds the wall-clock allowance, its total processor time is compared against the time limit, and its peak memory is compared against the memory limit. Output is read up to a configurable cap, so a program that floods its output cannot exhaust the host's memory (the run is then reported as `OutputLimit`).
+
+## Configuring the sandbox
+
+Pass a `RestrictedProcessOptions` to the executor to adjust the hardening. Every option defaults to the strongest setting a plain console executable tolerates:
+
+```csharp
+var options = new RestrictedProcessOptions
+{
+    TokenLevel = TokenLevel.Restricted,             // Unrestricted | Limited | Restricted
+    IntegrityLevel = IntegrityLevel.Low,            // Untrusted | Low | Medium
+    DisallowChildProcesses = true,
+    RestrictInheritedHandles = true,
+    ScrubEnvironment = true,
+    UseAlternateDesktop = true,
+    Mitigations = ProcessMitigations.Default,
+    ActiveProcessLimit = 1,
+    PriorityClass = ProcessPriorityClass.High,
+    CpuRateLimitPercent = null,                     // e.g. 25 caps the job to 25% of total CPU
+    MaxOutputSize = 64 * 1024 * 1024,
+};
+
+IExecutor executor = new RestrictedProcessExecutor(options);
+```
+
+A few mitigations are available but **off by default because they break the .NET Framework runtime**: `ProcessMitigations.Win32kSystemCallDisable` (user32 cannot initialize) and `ProcessMitigations.ProhibitDynamicCode` (blocks the JIT). Enable them only for native executables that don't need those subsystems.
 
 ## Building and testing
 
