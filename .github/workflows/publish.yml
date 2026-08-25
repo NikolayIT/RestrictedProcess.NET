@@ -50,9 +50,23 @@ jobs:
         with:
           user: ${{ secrets.NUGET_USER }}
 
+      # The package path is resolved here rather than handed to dotnet as a wildcard: dotnet nuget push
+      # did not expand it and failed with "File does not exist" even though the package was sitting right
+      # there. Resolving it also means the log says exactly which file went out, and the run stops if the
+      # build ever produces something other than the single package expected.
       - name: Push to nuget.org
-        run: >
-          dotnet nuget push src/RestrictedProcess/bin/Release/*.nupkg
-          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
-          --source https://api.nuget.org/v3/index.json
-          --skip-duplicate
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem -Path src/RestrictedProcess/bin/Release/*.nupkg)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one package to push, found $($packages.Count)."
+          }
+
+          $package = $packages[0].FullName
+          Write-Host "Pushing $package"
+
+          # The .snupkg beside it is picked up and pushed automatically.
+          dotnet nuget push $package `
+            --api-key ${{ steps.login.outputs.NUGET_API_KEY }} `
+            --source https://api.nuget.org/v3/index.json `
+            --skip-duplicate
