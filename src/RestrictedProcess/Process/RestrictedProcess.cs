@@ -25,7 +25,7 @@ namespace RestrictedProcess.Process
         private JobObject? jobObject;
         private int exitCode;
 
-        public RestrictedProcess(string fileName, string? workingDirectory, IEnumerable<string>? arguments = null, int bufferSize = 4096)
+        public RestrictedProcess(string fileName, string? workingDirectory, IEnumerable<string>? arguments = null, int bufferSize = 4096, Encoding? encoding = null)
         {
             // Initialize fields
             this.fileName = fileName;
@@ -33,7 +33,7 @@ namespace RestrictedProcess.Process
 
             // Prepare startup info and redirect standard IO handles
             var startupInfo = new StartupInfo();
-            this.RedirectStandardIoHandles(ref startupInfo, bufferSize);
+            this.RedirectStandardIoHandles(ref startupInfo, bufferSize, encoding ?? GetAnsiEncoding());
 
             // Create restricted token
             var restrictedToken = this.CreateRestrictedToken();
@@ -255,7 +255,31 @@ namespace RestrictedProcess.Process
             }
         }
 
-        private void RedirectStandardIoHandles(ref StartupInfo startupInfo, int bufferSize)
+        /// <summary>
+        /// Gets the encoding matching the system's active ANSI code page, which is the encoding
+        /// console child processes use for redirected standard IO by default.
+        /// On .NET Framework this is what <see cref="Encoding.Default"/> returns, but on modern
+        /// .NET <see cref="Encoding.Default"/> is always UTF-8, so the code page is resolved explicitly.
+        /// </summary>
+        private static Encoding GetAnsiEncoding()
+        {
+            try
+            {
+                var ansiCodePage = (int)NativeMethods.GetACP();
+                return CodePagesEncodingProvider.Instance.GetEncoding(ansiCodePage)
+                       ?? Encoding.GetEncoding(ansiCodePage);
+            }
+            catch (NotSupportedException)
+            {
+                return Encoding.Default;
+            }
+            catch (ArgumentException)
+            {
+                return Encoding.Default;
+            }
+        }
+
+        private void RedirectStandardIoHandles(ref StartupInfo startupInfo, int bufferSize, Encoding encoding)
         {
             // Some of this code is based on System.Diagnostics.Process.StartWithCreateProcess method implementation
             SafeFileHandle standardInputWritePipeHandle;
@@ -272,12 +296,12 @@ namespace RestrictedProcess.Process
             this.CreatePipe(out standardOutputReadPipeHandle, out startupInfo.StandardOutputHandle, false, bufferSize);
             this.CreatePipe(out standardErrorReadPipeHandle, out startupInfo.StandardErrorHandle, false, 4096);
 
-            this.StandardInput = new StreamWriter(new FileStream(standardInputWritePipeHandle, FileAccess.Write, bufferSize, false), Encoding.Default, bufferSize)
+            this.StandardInput = new StreamWriter(new FileStream(standardInputWritePipeHandle, FileAccess.Write, bufferSize, false), encoding, bufferSize)
                                      {
                                          AutoFlush = true,
                                      };
-            this.StandardOutput = new StreamReader(new FileStream(standardOutputReadPipeHandle, FileAccess.Read, bufferSize, false), Encoding.Default, true, bufferSize);
-            this.StandardError = new StreamReader(new FileStream(standardErrorReadPipeHandle, FileAccess.Read, 4096, false), Encoding.Default, true, 4096);
+            this.StandardOutput = new StreamReader(new FileStream(standardOutputReadPipeHandle, FileAccess.Read, bufferSize, false), encoding, true, bufferSize);
+            this.StandardError = new StreamReader(new FileStream(standardErrorReadPipeHandle, FileAccess.Read, 4096, false), encoding, true, 4096);
 
             /*
              * Child processes that use such C run-time functions as printf() and fprintf() can behave poorly when redirected.

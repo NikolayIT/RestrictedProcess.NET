@@ -82,6 +82,9 @@ namespace RestrictedProcess.Process
         [DllImport("kernel32.dll")]
         internal static extern uint ResumeThread(IntPtr hThread);
 
+        [DllImport("kernel32.dll")]
+        internal static extern uint GetACP();
+
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         internal static extern bool CreatePipe(
             out SafeFileHandle hReadPipe,
