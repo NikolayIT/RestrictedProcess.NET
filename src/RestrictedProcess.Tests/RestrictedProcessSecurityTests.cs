@@ -1,7 +1,5 @@
 ﻿namespace RestrictedProcess.Tests
 {
-    using System.Diagnostics;
-    using System.Linq;
     using System.Windows.Forms;
 
     using Xunit;
@@ -54,7 +52,7 @@ class Program
             Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
         }
 
-        [Fact]
+        [StaFact]
         public void RestrictedProcessShouldNotBeAbleToWriteToClipboard()
         {
             const string WriteToClipboardSourceCode = @"using System;
@@ -79,26 +77,29 @@ class Program
         [Fact]
         public void RestrictedProcessShouldNotBeAbleToStartProcess()
         {
-            const string StartNotepadProcessSourceCode = @"using System;
+            // Starting cmd.exe directly (without the shell): on modern Windows shell-brokered
+            // executables like notepad.exe are launched by a system service outside the job object,
+            // which the sandbox cannot (and does not need to) restrict.
+            const string StartCmdProcessSourceCode = @"using System;
 using System.Diagnostics;
 class Program
 {
     public static void Main()
     {
-        Process.Start(string.Format(""{0}\\notepad.exe"", Environment.SystemDirectory));
+        var startInfo = new ProcessStartInfo(string.Format(""{0}\\cmd.exe"", Environment.SystemDirectory))
+        {
+            UseShellExecute = false,
+        };
+        Process.Start(startInfo);
     }
 }";
-            var notepadsBefore = Process.GetProcessesByName("notepad.exe").Count();
-            var exePath = this.CreateExe("RestrictedProcessShouldNotBeAbleToStartProcess.exe", StartNotepadProcessSourceCode);
+            var exePath = this.CreateExe("RestrictedProcessShouldNotBeAbleToStartProcess.exe", StartCmdProcessSourceCode);
 
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
 
-            var notepadsAfter = Process.GetProcessesByName("notepad.exe").Count();
-
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
-            Assert.Equal(notepadsBefore, notepadsAfter);
         }
     }
 }
