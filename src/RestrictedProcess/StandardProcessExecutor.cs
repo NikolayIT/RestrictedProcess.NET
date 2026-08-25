@@ -6,166 +6,295 @@
 namespace RestrictedProcess
 {
     using System;
-    using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
 
     using Microsoft.Extensions.Logging;
     using Microsoft.Extensions.Logging.Abstractions;
 
-    // TODO: Implement memory constraints
-    public class StandardProcessExecutor : IExecutor
+    using DiagnosticsProcess = System.Diagnostics.Process;
+
+    /// <summary>
+    /// Runs a program with a plain <see cref="System.Diagnostics.Process"/>, with no sandbox at all.
+    /// <para>
+    /// This is a convenience for trusted programs and for comparing against the sandboxed path. It applies
+    /// the time limit and captures output, but it enforces <em>no</em> memory limit, no privilege
+    /// reduction and no isolation: never point it at code you do not trust.
+    /// </para>
+    /// </summary>
+    public sealed class StandardProcessExecutor : IExecutor
     {
         private readonly ILogger logger;
+        private readonly RestrictedProcessOptions options;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StandardProcessExecutor"/> class.
+        /// </summary>
+        /// <param name="logger">An optional logger for diagnostics.</param>
         public StandardProcessExecutor(ILogger? logger = null)
+            : this(new RestrictedProcessOptions(), logger)
         {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StandardProcessExecutor"/> class.
+        /// </summary>
+        /// <param name="options">Options; only the output caps, encoding, working directory and time
+        /// multiplier are honoured here.</param>
+        /// <param name="logger">An optional logger for diagnostics.</param>
+        public StandardProcessExecutor(RestrictedProcessOptions options, ILogger? logger = null)
+        {
+            this.options = options ?? throw new ArgumentNullException(nameof(options));
             this.logger = logger ?? NullLogger.Instance;
         }
 
-        public ProcessExecutionResult Execute(string fileName, string inputData, int timeLimit, int memoryLimit, IEnumerable<string>? executionArguments = null)
+        /// <inheritdoc/>
+        public ProcessExecutionResult Execute(ExecutionRequest request)
         {
-            var result = new ProcessExecutionResult { Type = ProcessExecutionResultType.Success };
-            var workingDirectory = new FileInfo(fileName).DirectoryName;
+            return this.ExecuteAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+        }
 
-            var processStartInfo = new ProcessStartInfo(fileName)
+        /// <inheritdoc/>
+        public async Task<ProcessExecutionResult> ExecuteAsync(ExecutionRequest request, CancellationToken cancellationToken = default)
+        {
+            if (request == null)
             {
-                Arguments = executionArguments == null ? string.Empty : string.Join(" ", executionArguments),
-                WindowStyle = ProcessWindowStyle.Hidden,
-                CreateNoWindow = true,
-                ErrorDialog = false,
-                UseShellExecute = false,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                WorkingDirectory = workingDirectory,
-            };
-
-            using (var process = System.Diagnostics.Process.Start(processStartInfo))
-            {
-                if (process == null)
-                {
-                    throw new Exception($"Could not start process: {fileName}!");
-                }
-
-                process.PriorityClass = ProcessPriorityClass.High;
-
-                // Write to standard input using another thread
-                process.StandardInput.WriteLineAsync(inputData).ContinueWith(
-                    delegate
-                    {
-                        // ReSharper disable once AccessToDisposedClosure
-                        process.StandardInput.FlushAsync().ContinueWith(
-                            delegate
-                            {
-                                process.StandardInput.Close();
-                            });
-                    });
-
-                // Read standard output using another thread to prevent process locking (waiting us to empty the output buffer)
-                var processOutputTask = process.StandardOutput.ReadToEndAsync().ContinueWith(
-                    x =>
-                    {
-                        result.ReceivedOutput = x.Result;
-                    });
-
-                // Read standard error using another thread
-                var errorOutputTask = process.StandardError.ReadToEndAsync().ContinueWith(
-                    x =>
-                    {
-                        result.ErrorOutput = x.Result;
-                    });
-
-                // Read memory consumption every few milliseconds to determine the peak memory usage of the process
-                const int TimeIntervalBetweenTwoMemoryConsumptionRequests = 45;
-                var memoryTaskCancellationToken = new CancellationTokenSource();
-                var memoryTask = Task.Run(
-                    () =>
-                    {
-                        while (true)
-                        {
-                            // ReSharper disable once AccessToDisposedClosure
-                            if (process.HasExited)
-                            {
-                                return;
-                            }
-
-                            // ReSharper disable once AccessToDisposedClosure
-                            var peakWorkingSetSize = process.PeakWorkingSet64;
-
-                            result.MemoryUsed = Math.Max(result.MemoryUsed, peakWorkingSetSize);
-
-                            if (memoryTaskCancellationToken.IsCancellationRequested)
-                            {
-                                return;
-                            }
-
-                            Thread.Sleep(TimeIntervalBetweenTwoMemoryConsumptionRequests);
-                        }
-                    },
-                    memoryTaskCancellationToken.Token);
-
-                // Wait the process to complete. Kill it after (timeLimit * 1.5) milliseconds if not completed.
-                // We are waiting the process for more than defined time and after this we compare the process time with the real time limit.
-                var exited = process.WaitForExit((int)(timeLimit * 1.5));
-                if (!exited)
-                {
-                    // Double check if the process has exited before killing it
-                    if (!process.HasExited)
-                    {
-                        process.Kill();
-
-                        // Approach: https://msdn.microsoft.com/en-us/library/system.diagnostics.process.kill(v=vs.110).aspx#Anchor_2
-                        process.WaitForExit();
-                    }
-
-                    result.Type = ProcessExecutionResultType.TimeLimit;
-                }
-
-                // Close the memory consumption check thread
-                memoryTaskCancellationToken.Cancel();
-                try
-                {
-                    // To be sure that memory consumption will be evaluated correctly
-                    memoryTask.Wait(TimeIntervalBetweenTwoMemoryConsumptionRequests);
-                }
-                catch (AggregateException ex)
-                {
-                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
-                }
-
-                // Close the task that gets the process error output
-                try
-                {
-                    errorOutputTask.Wait(100);
-                }
-                catch (AggregateException ex)
-                {
-                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
-                }
-
-                // Close the task that gets the process output
-                try
-                {
-                    processOutputTask.Wait(100);
-                }
-                catch (AggregateException ex)
-                {
-                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
-                }
-
-                Debug.Assert(process.HasExited, "Standard process didn't exit!");
-
-                // Report exit code and total process working time
-                result.ExitCode = process.ExitCode;
-                result.TimeWorked = process.ExitTime - process.StartTime;
-                result.PrivilegedProcessorTime = process.PrivilegedProcessorTime;
-                result.UserProcessorTime = process.UserProcessorTime;
+                throw new ArgumentNullException(nameof(request));
             }
 
-            if (result.TotalProcessorTime.TotalMilliseconds > timeLimit)
+            var result = new ProcessExecutionResult();
+            var startInfo = new ProcessStartInfo(request.FileName)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = request.WorkingDirectory
+                                   ?? this.options.WorkingDirectory
+                                   ?? Path.GetDirectoryName(Path.GetFullPath(request.FileName))
+                                   ?? string.Empty,
+            };
+
+            if (request.Arguments != null)
+            {
+                foreach (var argument in request.Arguments)
+                {
+                    startInfo.ArgumentList.Add(argument);
+                }
+            }
+
+            if (this.options.Encoding != null)
+            {
+                startInfo.StandardOutputEncoding = this.options.Encoding;
+                startInfo.StandardErrorEncoding = this.options.Encoding;
+            }
+
+            var deadlineReached = false;
+            var cancelled = false;
+
+            using (var process = new DiagnosticsProcess { StartInfo = startInfo })
+            {
+                if (!process.Start())
+                {
+                    throw new SandboxException("Could not start " + request.FileName + ".");
+                }
+
+                var outputTask = ReadBoundedAsync(process.StandardOutput, this.options.MaxOutputSize);
+                var errorTask = ReadBoundedAsync(process.StandardError, this.options.MaxErrorSize);
+                var inputTask = WriteInputAsync(process, request.Input);
+
+                var wallClockLimit = this.ResolveWallClockLimit(request);
+
+                try
+                {
+                    if (wallClockLimit.HasValue)
+                    {
+                        using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                        {
+                            deadline.CancelAfter(wallClockLimit.Value);
+                            try
+                            {
+                                await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                deadlineReached = !cancellationToken.IsCancellationRequested;
+                                cancelled = cancellationToken.IsCancellationRequested;
+                                Kill(process);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    cancelled = true;
+                    Kill(process);
+                }
+
+                // WaitForExitAsync returns once the process object signals; give the redirected streams the
+                // chance to reach end of file before reading what they captured.
+                var readers = Task.WhenAll(outputTask, errorTask, inputTask);
+                if (await Task.WhenAny(readers, Task.Delay(this.options.OutputDrainTimeout)).ConfigureAwait(false) != readers)
+                {
+                    this.logger.LogWarning("Standard IO did not reach end of file within {Timeout}.", this.options.OutputDrainTimeout);
+                }
+
+                var output = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : (string.Empty, false);
+                var error = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : (string.Empty, false);
+
+                result.ReceivedOutput = output.Item1;
+                result.OutputTruncated = output.Item2;
+                result.ErrorOutput = error.Item1;
+                result.ErrorTruncated = error.Item2;
+
+                process.Refresh();
+                result.PeakWorkingSetBytes = SafeRead(() => process.PeakWorkingSet64);
+                result.PeakCommitBytes = SafeRead(() => process.PeakPagedMemorySize64);
+                result.ExitCode = process.HasExited ? process.ExitCode : -1;
+                result.TimeWorked = process.HasExited ? process.ExitTime - process.StartTime : TimeSpan.Zero;
+                result.UserProcessorTime = SafeRead(() => process.UserProcessorTime);
+                result.PrivilegedProcessorTime = SafeRead(() => process.PrivilegedProcessorTime);
+            }
+
+            result.MemoryUsed = this.options.MemoryMetric == MemoryMetric.PeakWorkingSet
+                ? result.PeakWorkingSetBytes
+                : Math.Max(result.PeakCommitBytes, result.PeakWorkingSetBytes);
+
+            this.Classify(request, result, deadlineReached, cancelled);
+            return result;
+        }
+
+        private static void Kill(DiagnosticsProcess process)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+            }
+        }
+
+        private static T SafeRead<T>(Func<T> read)
+        {
+            try
+            {
+                return read();
+            }
+            catch (InvalidOperationException)
+            {
+                return default!;
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return default!;
+            }
+        }
+
+        private static async Task<(string Text, bool Truncated)> ReadBoundedAsync(StreamReader reader, long maxCharacters)
+        {
+            var builder = new StringBuilder();
+            var buffer = new char[8192];
+            var truncated = false;
+
+            try
+            {
+                int read;
+                while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+                {
+                    if (truncated)
+                    {
+                        continue;
+                    }
+
+                    if (maxCharacters > 0 && builder.Length + read > maxCharacters)
+                    {
+                        builder.Append(buffer, 0, (int)(maxCharacters - builder.Length));
+                        truncated = true;
+                        continue;
+                    }
+
+                    builder.Append(buffer, 0, read);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            return (builder.ToString(), truncated);
+        }
+
+        private static async Task WriteInputAsync(DiagnosticsProcess process, string input)
+        {
+            try
+            {
+                await process.StandardInput.WriteLineAsync(input ?? string.Empty).ConfigureAwait(false);
+                await process.StandardInput.FlushAsync().ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            finally
+            {
+                try
+                {
+                    process.StandardInput.Close();
+                }
+                catch (IOException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        private TimeSpan? ResolveWallClockLimit(ExecutionRequest request)
+        {
+            if (request.WallClockLimit.HasValue)
+            {
+                return request.WallClockLimit;
+            }
+
+            if (!request.CpuTimeLimit.HasValue)
+            {
+                return null;
+            }
+
+            return TimeSpan.FromMilliseconds(
+                request.CpuTimeLimit.Value.TotalMilliseconds * Math.Max(1.0, this.options.WallClockWaitMultiplier));
+        }
+
+        private void Classify(ExecutionRequest request, ProcessExecutionResult result, bool deadlineReached, bool cancelled)
+        {
+            if (cancelled)
+            {
+                result.Type = ProcessExecutionResultType.Cancelled;
+                return;
+            }
+
+            if (deadlineReached
+                || (request.CpuTimeLimit.HasValue && result.TotalProcessorTime > request.CpuTimeLimit.Value))
             {
                 result.Type = ProcessExecutionResultType.TimeLimit;
             }
@@ -175,12 +304,23 @@ namespace RestrictedProcess
                 result.Type = ProcessExecutionResultType.RunTimeError;
             }
 
-            if (result.MemoryUsed > memoryLimit)
+            if (request.MemoryLimitBytes.HasValue && result.MemoryUsed > request.MemoryLimitBytes.Value)
             {
                 result.Type = ProcessExecutionResultType.MemoryLimit;
             }
 
-            return result;
+            if (this.options.TreatNonZeroExitCodeAsRunTimeError
+                && result.ExitCode != 0
+                && result.Type == ProcessExecutionResultType.Success)
+            {
+                result.Type = ProcessExecutionResultType.RunTimeError;
+            }
+
+            if ((result.OutputTruncated || result.ErrorTruncated)
+                && (result.Type == ProcessExecutionResultType.Success || result.Type == ProcessExecutionResultType.RunTimeError))
+            {
+                result.Type = ProcessExecutionResultType.OutputLimit;
+            }
         }
     }
 }

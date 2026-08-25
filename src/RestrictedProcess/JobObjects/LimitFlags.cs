@@ -109,5 +109,23 @@ namespace RestrictedProcess.JobObjects
         /// Windows Server 2008, Windows Vista, Windows Server 2003, and Windows XP: This flag is supported starting with Windows 7 and Windows Server 2008 R2.
         /// </summary>
         JOB_OBJECT_LIMIT_SUBSET_AFFINITY = 0x00004000,
+
+        //// Notification-only limits (JobObjectNotificationLimitInformation). Exceeding one of these
+        //// posts a message to the completion port instead of failing an allocation or terminating.
+
+        /// <summary>
+        /// The job-wide limit on bytes read from disk (JOB_OBJECT_LIMIT_JOB_READ_BYTES).
+        /// </summary>
+        JOB_OBJECT_LIMIT_JOB_READ_BYTES = 0x00010000,
+
+        /// <summary>
+        /// The job-wide limit on bytes written to disk (JOB_OBJECT_LIMIT_JOB_WRITE_BYTES).
+        /// </summary>
+        JOB_OBJECT_LIMIT_JOB_WRITE_BYTES = 0x00020000,
+
+        /// <summary>
+        /// The job-wide CPU rate control tolerance limit (JOB_OBJECT_LIMIT_RATE_CONTROL).
+        /// </summary>
+        JOB_OBJECT_LIMIT_RATE_CONTROL = 0x00040000,
     }
 }

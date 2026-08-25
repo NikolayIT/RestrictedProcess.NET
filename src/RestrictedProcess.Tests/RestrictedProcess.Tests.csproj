@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
@@ -6,6 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,6 +29,17 @@
 
   <ItemGroup>
     <AdditionalFiles Include="..\stylecop.json" />
+  </ItemGroup>
+
+  <!--
+    These tests are not unit tests: each one compiles an executable, creates a job object and a desktop,
+    then measures how much processor time and memory the sandboxed program used. Running them in parallel
+    makes those measurements a function of how busy the machine is, which is how a program that finishes in
+    50 ms ends up tripping a time limit. It also multiplies the number of threads blocked inside the
+    synchronous Execute overload, starving the thread pool its asynchronous machinery needs.
+  -->
+  <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

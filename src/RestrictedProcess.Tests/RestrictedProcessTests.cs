@@ -47,7 +47,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldStopProgramAfterTimeIsEnded.exe", TimeLimitSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 100, 32 * 1024 * 1024);
+            var result = process.Execute(Request(exePath, string.Empty, 100, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.TimeLimit);
@@ -60,7 +60,7 @@ class Program
 
             const string InputData = "SomeInputData!!@#$%^&*(\n";
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, InputData, 2000, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal(InputData.Trim(), result.ReceivedOutput.Trim());
@@ -73,7 +73,7 @@ class Program
 
             const string InputData = "Николай\n";
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, InputData, 2000, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal(InputData.Trim(), result.ReceivedOutput.Trim());
@@ -95,7 +95,7 @@ class Program
 
             const string InputData = "Николай\n";
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, InputData, 2000, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal("7", result.ReceivedOutput.Trim());
@@ -117,7 +117,7 @@ class Program
 
             const string InputData = "абвгдежзийклмнопрстуфхцчшщъьюя\n";
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, InputData, 2000, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal("True", result.ReceivedOutput.Trim());
@@ -137,7 +137,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldNotBlockWhenEnterEndlessLoop.exe", EndlessLoopSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 50, 32 * 1024 * 1024);
+            var result = process.Execute(Request(exePath, string.Empty, 50, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.TimeLimit);
@@ -158,7 +158,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldStandardErrorContentShouldContainExceptions.exe", ThrowExceptionSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 500, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 500, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
@@ -171,7 +171,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldReturnCorrectAmountOfUsedMemory.exe", Consuming50MbOfMemorySourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 5000, 100 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 5000, 100 * 1024 * 1024));
 
             Console.WriteLine(result.MemoryUsed);
 
@@ -185,7 +185,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldReturnMemoryLimitWhenNeeded.exe", Consuming50MbOfMemorySourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 5000, 30 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 5000, 30 * 1024 * 1024));
 
             Console.WriteLine(result.MemoryUsed);
 
@@ -212,7 +212,7 @@ class Program
 
             const long MaxOutputSize = 1024 * 1024;
             var options = new RestrictedProcessOptions { MaxOutputSize = MaxOutputSize };
-            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 5000, 32 * 1024 * 1024);
+            var result = new RestrictedProcessExecutor(options).Execute(Request(exePath, string.Empty, 5000, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal(ProcessExecutionResultType.OutputLimit, result.Type);
@@ -235,7 +235,7 @@ class Program
 }";
             var exePath = this.CreateExe("RestrictedProcessShouldReportNonZeroExitCodeAsRunTimeError.exe", ExitWithCodeSourceCode);
 
-            var result = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 2000, 32 * 1024 * 1024);
+            var result = new RestrictedProcessExecutor().Execute(UntimedRequest(exePath, string.Empty, 2000, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal(ProcessExecutionResultType.RunTimeError, result.Type);
@@ -256,12 +256,12 @@ class Program
 }";
             var exePath = this.CreateExe("RestrictedProcessShouldRunWithConfiguredPriorityClass.exe", PrintPriorityClassSourceCode);
 
-            var defaultResult = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 2000, 32 * 1024 * 1024);
+            var defaultResult = new RestrictedProcessExecutor().Execute(UntimedRequest(exePath, string.Empty, 2000, 32 * 1024 * 1024));
             Assert.Equal(ProcessExecutionResultType.Success, defaultResult.Type);
             Assert.Equal("High", defaultResult.ReceivedOutput.Trim());
 
             var options = new RestrictedProcessOptions { PriorityClass = ProcessPriorityClass.Normal };
-            var normalResult = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 2000, 32 * 1024 * 1024);
+            var normalResult = new RestrictedProcessExecutor(options).Execute(UntimedRequest(exePath, string.Empty, 2000, 32 * 1024 * 1024));
             Assert.Equal(ProcessExecutionResultType.Success, normalResult.Type);
             Assert.Equal("Normal", normalResult.ReceivedOutput.Trim());
         }
@@ -281,7 +281,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldRespectProcessorAffinity.exe", PrintAffinitySourceCode);
 
             var options = new RestrictedProcessOptions { ProcessorAffinityMask = (UIntPtr)0x1 };
-            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 2000, 32 * 1024 * 1024);
+            var result = new RestrictedProcessExecutor(options).Execute(UntimedRequest(exePath, string.Empty, 2000, 32 * 1024 * 1024));
 
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
             Assert.Equal("1", result.ReceivedOutput.Trim());
@@ -313,7 +313,7 @@ class Program
             var percent = Math.Max(1, 40 / Environment.ProcessorCount);
 
             var options = new RestrictedProcessOptions { CpuRateLimitPercent = percent };
-            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 5000, 32 * 1024 * 1024);
+            var result = new RestrictedProcessExecutor(options).Execute(Request(exePath, string.Empty, 5000, 32 * 1024 * 1024));
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
 
             // The hard cap is an absolute upper bound on CPU time regardless of other load: a busy

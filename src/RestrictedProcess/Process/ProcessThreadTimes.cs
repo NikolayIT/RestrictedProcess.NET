@@ -7,16 +7,17 @@ namespace RestrictedProcess.Process
 {
     using System;
 
+    /// <summary>
+    /// The four raw FILETIME values returned by GetProcessTimes, kept as ticks. Converting them through
+    /// <see cref="DateTime.FromFileTime(long)"/> would move them into local time, which makes an elapsed
+    /// time computed from the difference wrong across a daylight saving transition.
+    /// </summary>
     internal struct ProcessThreadTimes
     {
         public long Create;
         public long Exit;
         public long Kernel;
         public long User;
-
-        public DateTime StartTime => DateTime.FromFileTime(this.Create);
-
-        public DateTime ExitTime => DateTime.FromFileTime(this.Exit);
 
         public TimeSpan PrivilegedProcessorTime => new TimeSpan(this.Kernel);
 

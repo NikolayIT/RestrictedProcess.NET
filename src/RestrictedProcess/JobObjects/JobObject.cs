@@ -6,121 +6,76 @@
 namespace RestrictedProcess.JobObjects
 {
     using System;
-    using System.ComponentModel;
     using System.Runtime.InteropServices;
 
-    internal class JobObject : IDisposable
+    /// <summary>
+    /// A Win32 job object holding the sandboxed process tree. The handle is created before the process
+    /// so it can be attached at creation time through PROC_THREAD_ATTRIBUTE_JOB_LIST, which removes the
+    /// window between CreateProcess and AssignProcessToJobObject entirely.
+    /// </summary>
+    internal sealed class JobObject : IDisposable
     {
-        private IntPtr handle;
-        private bool disposed;
+        private readonly SafeJobObjectHandle handle;
 
         public JobObject()
         {
-            var attr = default(SecurityAttributes);
-            this.handle = NativeMethods.CreateJobObject(ref attr, null);
+            this.handle = NativeMethods.CreateJobObject(IntPtr.Zero, null);
+            if (this.handle.IsInvalid)
+            {
+                throw SandboxException.FromLastWin32Error(SandboxStep.CreateJobObject);
+            }
         }
 
-        ~JobObject()
-        {
-            this.Dispose(false);
-        }
+        public SafeJobObjectHandle Handle => this.handle;
 
         public void SetExtendedLimitInformation(ExtendedLimitInformation extendedInfo)
         {
-            var length = Marshal.SizeOf(typeof(ExtendedLimitInformation));
-            var extendedInfoPointer = Marshal.AllocHGlobal(length);
-            try
-            {
-                Marshal.StructureToPtr(extendedInfo, extendedInfoPointer, false);
-                if (!NativeMethods.SetInformationJobObject(this.handle, InfoClass.ExtendedLimitInformation, extendedInfoPointer, (uint)length))
-                {
-                    throw new Win32Exception();
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(extendedInfoPointer);
-            }
-        }
-
-        public void SetCpuRateControlInformation(CpuRateControlInformation cpuRateControlInformation)
-        {
-            var length = Marshal.SizeOf(typeof(CpuRateControlInformation));
-            var pointer = Marshal.AllocHGlobal(length);
-            try
-            {
-                Marshal.StructureToPtr(cpuRateControlInformation, pointer, false);
-                if (!NativeMethods.SetInformationJobObject(this.handle, InfoClass.CpuRateControlInformation, pointer, (uint)length))
-                {
-                    throw new Win32Exception();
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(pointer);
-            }
+            this.SetInformation(InfoClass.ExtendedLimitInformation, extendedInfo, SandboxStep.SetJobLimits);
         }
 
         public void SetBasicUiRestrictions(BasicUiRestrictions uiRestrictions)
         {
-            var length = Marshal.SizeOf(typeof(BasicUiRestrictions));
-            var uiRestrictionsInfoPointer = Marshal.AllocHGlobal(length);
-            try
+            this.SetInformation(InfoClass.BasicUiRestrictions, uiRestrictions, SandboxStep.SetJobUiRestrictions);
+        }
+
+        public void SetCpuRateControlInformation(CpuRateControlInformation cpuRateControlInformation)
+        {
+            this.SetInformation(InfoClass.CpuRateControlInformation, cpuRateControlInformation, SandboxStep.SetJobCpuRate);
+        }
+
+        /// <summary>
+        /// Applies the soft notification limits. Returns false when the OS rejects them, so the caller can
+        /// fall back to comparing the accounting totals after the run instead of failing the execution.
+        /// </summary>
+        public bool TrySetNotificationLimits(NotificationLimitInformation notificationLimits)
+        {
+            return this.TrySetInformation(InfoClass.NotificationLimitInformation, notificationLimits);
+        }
+
+        public void AssociateCompletionPort(SafeIoCompletionPortHandle completionPort, IntPtr completionKey)
+        {
+            var info = new AssociateCompletionPort
             {
-                Marshal.StructureToPtr(uiRestrictions, uiRestrictionsInfoPointer, false);
-                if (!NativeMethods.SetInformationJobObject(this.handle, InfoClass.BasicUiRestrictions, uiRestrictionsInfoPointer, (uint)length))
-                {
-                    throw new Win32Exception();
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(uiRestrictionsInfoPointer);
-            }
+                CompletionKey = completionKey,
+                CompletionPort = completionPort.DangerousGetHandle(),
+            };
+
+            this.SetInformation(InfoClass.AssociateCompletionPortInformation, info, SandboxStep.AssociateJobCompletionPort);
         }
 
         public ExtendedLimitInformation GetExtendedLimitInformation()
         {
-            var length = Marshal.SizeOf(typeof(ExtendedLimitInformation));
-            var extendedLimitInformationPointer = Marshal.AllocHGlobal(length);
-            try
-            {
-                if (!NativeMethods.QueryInformationJobObject(this.handle, InfoClass.ExtendedLimitInformation, extendedLimitInformationPointer, (uint)length, IntPtr.Zero))
-                {
-                    throw new Win32Exception();
-                }
-
-                return Marshal.PtrToStructure<ExtendedLimitInformation>(extendedLimitInformationPointer);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(extendedLimitInformationPointer);
-            }
+            return this.QueryInformation<ExtendedLimitInformation>(InfoClass.ExtendedLimitInformation);
         }
 
-        //// // The peak memory used by any process ever associated with the job.
-        //// IntPtr PeakProcessMemoryUsed
-        //// {
-        ////     get
-        ////     {
-        ////         ExtendedLimitInformation extendedLimitInformation =
-        ////             QueryJobInformation<JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation>(_hJob);
-        ////         return System::IntPtr((void*)extendedLimitInformation.PeakProcessMemoryUsed);
-        ////     }
-        //// }
-
-        //// // The peak memory usage of all processes currently associated with the job.
-        //// System::IntPtr JobObject::PeakJobMemoryUsed::get()
-        //// {
-        ////     JOBOBJECT_EXTENDED_LIMIT_INFORMATION extendedLimitInformation =
-        ////         QueryJobInformation<JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation>(_hJob);
-        ////     return System::IntPtr((void *)extendedLimitInformation.PeakJobMemoryUsed);
-        //// }
-
-        public void Close()
+        public BasicAndIoAccountingInformation GetAccountingInformation()
         {
-            NativeMethods.CloseHandle(this.handle);
-            this.handle = IntPtr.Zero;
+            return this.QueryInformation<BasicAndIoAccountingInformation>(InfoClass.BasicAndIoAccountingInformation);
+        }
+
+        public LimitViolationInformation GetLimitViolationInformation()
+        {
+            return this.QueryInformation<LimitViolationInformation>(InfoClass.LimitViolationInformation);
         }
 
         public bool AddProcess(IntPtr processHandle)
@@ -130,26 +85,60 @@ namespace RestrictedProcess.JobObjects
 
         public bool Terminate(uint exitCode)
         {
-            return this.handle != IntPtr.Zero && NativeMethods.TerminateJobObject(this.handle, exitCode);
+            return !this.handle.IsInvalid
+                   && !this.handle.IsClosed
+                   && NativeMethods.TerminateJobObject(this.handle, exitCode);
         }
 
         public void Dispose()
         {
-            this.Dispose(true);
+            // The job carries JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so releasing the last handle also kills
+            // anything still running inside it.
+            this.handle.Dispose();
         }
 
-        protected virtual void Dispose(bool disposing)
+        private void SetInformation<T>(InfoClass infoClass, T value, SandboxStep step)
+            where T : struct
         {
-            if (disposing)
+            if (!this.TrySetInformation(infoClass, value))
             {
-                if (this.disposed)
+                throw SandboxException.FromLastWin32Error(step, infoClass.ToString());
+            }
+        }
+
+        private bool TrySetInformation<T>(InfoClass infoClass, T value)
+            where T : struct
+        {
+            var length = Marshal.SizeOf<T>();
+            var pointer = Marshal.AllocHGlobal(length);
+            try
+            {
+                Marshal.StructureToPtr(value, pointer, false);
+                return NativeMethods.SetInformationJobObject(this.handle, infoClass, pointer, (uint)length);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
+
+        private T QueryInformation<T>(InfoClass infoClass)
+            where T : struct
+        {
+            var length = Marshal.SizeOf<T>();
+            var pointer = Marshal.AllocHGlobal(length);
+            try
+            {
+                if (!NativeMethods.QueryInformationJobObject(this.handle, infoClass, pointer, (uint)length, IntPtr.Zero))
                 {
-                    return;
+                    throw SandboxException.FromLastWin32Error(SandboxStep.QueryJobInformation, infoClass.ToString());
                 }
 
-                this.Close();
-                this.disposed = true;
-                GC.SuppressFinalize(this);
+                return Marshal.PtrToStructure<T>(pointer);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pointer);
             }
         }
     }

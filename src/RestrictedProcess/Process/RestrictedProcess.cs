@@ -7,143 +7,148 @@ namespace RestrictedProcess.Process
 {
     using System;
     using System.Collections.Generic;
-    using System.ComponentModel;
-    using System.Diagnostics;
     using System.IO;
     using System.Linq;
     using System.Runtime.InteropServices;
+    using System.Security.Principal;
     using System.Text;
+    using System.Threading;
 
     using global::RestrictedProcess.JobObjects;
 
     using Microsoft.Win32.SafeHandles;
 
-    public class RestrictedProcess : IDisposable
+    /// <summary>
+    /// A manual reimplementation of Process.Start that puts the new process behind every sandbox boundary
+    /// Windows offers to an unelevated caller: a restricted token at a low integrity level, a job object
+    /// attached at creation, process creation mitigation policies, an inherited-handle whitelist, a
+    /// kernel-level child-process ban, a scrubbed environment, a throwaway desktop and, optionally, an
+    /// AppContainer with no network capability.
+    /// </summary>
+    public sealed class RestrictedProcess : IDisposable
     {
-        private readonly SafeProcessHandle safeProcessHandle;
-        private readonly string fileName = string.Empty;
         private readonly RestrictedProcessOptions options;
+        private readonly string fileName;
+        private readonly JobObject jobObject;
+        private readonly JobNotificationListener notifications;
+        private readonly SafeProcessHandle safeProcessHandle;
+        private readonly SandboxDesktop? desktop;
+        private readonly AppContainerProfile? appContainer;
+        private readonly WritableDirectoryGrant? writableDirectories;
+        private readonly SecurityIdentifier uniqueRunSid;
+
         private ProcessInformation processInformation;
-        private JobObject? jobObject;
-        private SandboxDesktop? desktop;
-        private IntPtr appContainerSid = IntPtr.Zero;
-        private string? appContainerName;
-        private int exitCode;
+        private IntPtr mainThreadHandle;
+        private long peakWorkingSetBytes;
+        private int killed;
+        private int disposed;
 
-        public RestrictedProcess(string fileName, string? workingDirectory, IEnumerable<string>? arguments = null, int bufferSize = 4096, Encoding? encoding = null, RestrictedProcessOptions? options = null)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="RestrictedProcess"/> class and creates the
+        /// sandboxed process in a suspended state. Call <see cref="Start"/> to let it run.
+        /// </summary>
+        /// <param name="startInfo">What to run and the limits to enforce.</param>
+        /// <param name="options">The sandbox configuration.</param>
+        public RestrictedProcess(RestrictedProcessStartInfo startInfo, RestrictedProcessOptions options)
         {
-            // Initialize fields
-            this.fileName = fileName;
-            this.options = options ?? new RestrictedProcessOptions();
-            this.IsDisposed = false;
+            if (startInfo == null)
+            {
+                throw new ArgumentNullException(nameof(startInfo));
+            }
 
-            // Prepare startup info and redirect standard IO handles
+            this.options = options ?? throw new ArgumentNullException(nameof(options));
+            ValidateOptions(this.options);
+            this.fileName = Path.GetFullPath(startInfo.FileName);
+            this.uniqueRunSid = SidFactory.CreateUniqueRunSid();
+
+            var encoding = startInfo.Encoding ?? GetAnsiEncoding();
             var startupInfo = new StartupInfo();
-            this.RedirectStandardIoHandles(ref startupInfo, bufferSize, encoding ?? GetAnsiEncoding());
-
-            // Create restricted token
-            var restrictedToken = this.CreateRestrictedToken(this.options.TokenLevel);
-
-            // Set mandatory label
-            this.SetTokenMandatoryLabel(restrictedToken, (SecurityMandatoryLabel)this.options.IntegrityLevel);
-
-            var processSecurityAttributes = new SecurityAttributes();
-            var threadSecurityAttributes = new SecurityAttributes();
-            this.processInformation = default(ProcessInformation);
-
-            var creationFlags = (uint)(
-                CreateProcessFlags.CREATE_SUSPENDED |
-                CreateProcessFlags.CREATE_BREAKAWAY_FROM_JOB |
-                CreateProcessFlags.CREATE_UNICODE_ENVIRONMENT |
-                CreateProcessFlags.CREATE_NEW_PROCESS_GROUP |
-                CreateProcessFlags.DETACHED_PROCESS | // http://stackoverflow.com/questions/6371149/what-is-the-difference-between-detach-process-and-create-no-window-process-creat
-                CreateProcessFlags.CREATE_NO_WINDOW) |
-                (uint)this.options.PriorityClass;
-
-            string commandLine;
-            if (arguments != null)
-            {
-                var commandLineBuilder = new StringBuilder();
-                commandLineBuilder.AppendFormat("\"{0}\"", fileName);
-                foreach (var argument in arguments)
-                {
-                    commandLineBuilder.Append(' ');
-                    commandLineBuilder.Append(argument);
-                }
-
-                commandLine = commandLineBuilder.ToString();
-            }
-            else
-            {
-                commandLine = fileName;
-            }
-
-            if (this.options.UseAlternateDesktop)
-            {
-                this.desktop = new SandboxDesktop();
-                startupInfo.Desktop = Marshal.StringToHGlobalUni(this.desktop.Name);
-            }
-
-            if (this.options.BlockNetworkAccess)
-            {
-                // Creating a per-run AppContainer profile (a derived SID alone is not enough - the OS
-                // needs the registered profile to launch into it) and granting the "ALL APPLICATION
-                // PACKAGES" identity read/execute on the executable so the AppContainer can load it.
-                this.appContainerName = "RestrictedProcess." + Guid.NewGuid().ToString("N");
-                var hr = NativeMethods.CreateAppContainerProfile(
-                    this.appContainerName, this.appContainerName, this.appContainerName, null, 0, out this.appContainerSid);
-                if (hr != 0)
-                {
-                    // HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)
-                    if (hr == unchecked((int)0x800700B7))
-                    {
-                        if (NativeMethods.DeriveAppContainerSidFromAppContainerName(this.appContainerName, out this.appContainerSid) != 0)
-                        {
-                            throw new Win32Exception();
-                        }
-                    }
-                    else
-                    {
-                        throw new Win32Exception(hr);
-                    }
-                }
-
-                GrantAllApplicationPackagesAccess(fileName, workingDirectory);
-            }
-
+            SandboxToken? token = null;
             ProcThreadAttributeList? attributeList = null;
             var environmentBlock = IntPtr.Zero;
+            var assignToJobAfterCreation = false;
+
             try
             {
-                attributeList = this.CreateProcThreadAttributeList(startupInfo);
-                if (attributeList != null)
+                this.RedirectStandardIoHandles(ref startupInfo, startInfo.PipeBufferSize, encoding);
+
+                token = RestrictedTokenBuilder.Create(this.options, this.uniqueRunSid);
+
+                if (this.options.WritableDirectories.Count > 0)
                 {
-                    startupInfo.UseExtendedStartupInfo(attributeList.Pointer);
-                    creationFlags |= (uint)CreateProcessFlags.EXTENDED_STARTUPINFO_PRESENT;
+                    this.writableDirectories = new WritableDirectoryGrant(this.uniqueRunSid, this.options.WritableDirectories);
                 }
 
-                environmentBlock = this.CreateEnvironmentBlock(workingDirectory);
+                if (this.options.BlockNetworkAccess)
+                {
+                    this.appContainer = new AppContainerProfile(
+                        this.options.AppContainerProfileName,
+                        new[] { this.fileName, startInfo.WorkingDirectory ?? string.Empty }.Where(x => x.Length > 0));
+                }
+
+                if (this.options.UseAlternateDesktop)
+                {
+                    this.desktop = new SandboxDesktop(
+                        this.options.IntegrityLevel,
+                        token.UserSid,
+                        this.BuildDesktopAllowedSids(token),
+                        this.options.UseAlternateWindowStation);
+                    startupInfo.Desktop = Marshal.StringToHGlobalUni(this.desktop.Name);
+                }
+
+                // The job is created before the process so it can be attached at creation time. Its limits
+                // are then in force from the first instruction the process executes.
+                this.jobObject = new JobObject();
+                this.ConfigureJob(startInfo);
+                this.notifications = new JobNotificationListener(this.jobObject);
+
+                attributeList = this.CreateProcThreadAttributeList(startupInfo, out assignToJobAfterCreation);
+                startupInfo.UseExtendedStartupInfo(attributeList.Pointer);
+
+                environmentBlock = this.CreateEnvironmentBlock(startInfo.WorkingDirectory);
+
+                var creationFlags = (uint)(CreateProcessFlags.CREATE_SUSPENDED
+                                           | CreateProcessFlags.CREATE_UNICODE_ENVIRONMENT
+                                           | CreateProcessFlags.DETACHED_PROCESS
+                                           | CreateProcessFlags.EXTENDED_STARTUPINFO_PRESENT)
+                                    | (uint)this.options.PriorityClass;
+
+                var commandLine = new StringBuilder(CommandLine.Build(this.fileName, startInfo.Arguments));
 
                 if (!NativeMethods.CreateProcessAsUser(
-                        restrictedToken,
-                        this.options.BlockNetworkAccess ? fileName : null,
+                        token.Handle,
+                        this.fileName,
                         commandLine,
-                        processSecurityAttributes,
-                        threadSecurityAttributes,
-                        true, // In order to standard input, output and error redirection work, the handles must be inheritable and the CreateProcess() API must specify that inheritable handles are to be inherited by the child process by specifying TRUE in the bInheritHandles parameter.
+                        IntPtr.Zero,
+                        IntPtr.Zero,
+                        true, // Required for the redirected standard IO handles; the handle list above is what makes it safe.
                         creationFlags,
                         environmentBlock,
-                        workingDirectory,
+                        startInfo.WorkingDirectory,
                         startupInfo,
                         out this.processInformation))
                 {
-                    throw new Win32Exception();
+                    throw SandboxException.FromLastWin32Error(SandboxStep.CreateProcess, this.fileName);
                 }
+
+                this.safeProcessHandle = new SafeProcessHandle(this.processInformation.Process);
+                this.mainThreadHandle = this.processInformation.Thread;
+                this.ExitedHandle = new ProcessWaitHandle(this.safeProcessHandle);
+            }
+            catch
+            {
+                this.jobObject?.Dispose();
+                this.notifications?.Dispose();
+                this.desktop?.Dispose();
+                this.appContainer?.Dispose();
+                this.writableDirectories?.Dispose();
+                throw;
             }
             finally
             {
-                // This is a very important line! Without disposing the startupInfo handles, reading the standard output (or error) will hang forever.
-                // Same problem described here: http://social.msdn.microsoft.com/Forums/vstudio/en-US/3c25a2e8-b1ea-4fc4-927b-cb865d435147/how-does-processstart-work-in-getting-output
+                // Critical: the child ends of the pipes have to be closed as soon as CreateProcessAsUser
+                // returns. While the parent still holds a copy of the write end, reading standard output
+                // never reaches end of file and the read hangs forever.
                 if (startupInfo.Desktop != IntPtr.Zero)
                 {
                     Marshal.FreeHGlobal(startupInfo.Desktop);
@@ -152,32 +157,62 @@ namespace RestrictedProcess.Process
 
                 startupInfo.Dispose();
 
+                // The attribute list holds unmanaged copies of every attribute value, and
+                // UpdateProcThreadAttribute stored pointers to them, so it can only be freed now that
+                // CreateProcessAsUser has returned.
                 attributeList?.Dispose();
+
                 if (environmentBlock != IntPtr.Zero)
                 {
                     Marshal.FreeHGlobal(environmentBlock);
                 }
 
-                NativeMethods.CloseHandle(restrictedToken);
+                token?.Dispose();
             }
 
-            this.safeProcessHandle = new SafeProcessHandle(this.processInformation.Process);
+            if (assignToJobAfterCreation && !this.jobObject.AddProcess(this.processInformation.Process))
+            {
+                var failure = SandboxException.FromLastWin32Error(SandboxStep.AssignProcessToJob);
+                this.Kill();
+                throw failure;
+            }
         }
 
+        /// <summary>
+        /// Gets the writer for the standard input of the sandboxed process.
+        /// </summary>
         public StreamWriter StandardInput { get; private set; } = null!;
 
+        /// <summary>
+        /// Gets the reader for the standard output of the sandboxed process.
+        /// </summary>
         public StreamReader StandardOutput { get; private set; } = null!;
 
+        /// <summary>
+        /// Gets the reader for the standard error of the sandboxed process.
+        /// </summary>
         public StreamReader StandardError { get; private set; } = null!;
 
+        /// <summary>
+        /// Gets the identifier of the sandboxed process.
+        /// </summary>
         public int Id => this.processInformation.ProcessId;
 
-        public int MainThreadId => this.processInformation.ThreadId;
+        /// <summary>
+        /// Gets the SID generated for this execution alone. It is a restricting SID on the token and is
+        /// granted access in the token's default DACL, so objects this process creates are not reachable
+        /// by other sandboxed runs of the same user.
+        /// </summary>
+        public SecurityIdentifier UniqueRunSid => this.uniqueRunSid;
 
-        public IntPtr Handle => this.processInformation.Process;
+        /// <summary>
+        /// Gets the name of the desktop the process runs on, or null when the alternate desktop is off.
+        /// </summary>
+        public string? DesktopName => this.desktop?.Name;
 
-        public IntPtr MainThreadHandle => this.processInformation.Thread;
-
+        /// <summary>
+        /// Gets a value indicating whether the process has exited.
+        /// </summary>
         public bool HasExited
         {
             get
@@ -187,188 +222,256 @@ namespace RestrictedProcess.Process
                     return true;
                 }
 
-                return NativeMethods.GetExitCodeProcess(this.safeProcessHandle, out this.exitCode)
-                       && this.exitCode != NativeMethods.STILL_ACTIVE;
+                // Deliberately not GetExitCodeProcess against STILL_ACTIVE: a program that legitimately
+                // exits with code 259 would be reported as running forever.
+                return NativeMethods.WaitForSingleObject(this.safeProcessHandle, 0) == NativeMethods.WAIT_OBJECT_0;
             }
         }
 
+        /// <summary>
+        /// Gets the exit code of the process.
+        /// </summary>
         public int ExitCode
         {
             get
             {
-                if (!this.HasExited)
+                if (!NativeMethods.GetExitCodeProcess(this.safeProcessHandle, out var exitCode))
                 {
-                    throw new InvalidOperationException("Process is still active!");
+                    throw new InvalidOperationException(
+                        "Could not read the exit code of the sandboxed process.",
+                        SandboxException.FromLastWin32Error(SandboxStep.QueryProcessTimes, "GetExitCodeProcess"));
                 }
 
-                return this.exitCode;
+                return exitCode;
             }
         }
 
-        public string ExitCodeAsString => new Win32Exception(this.ExitCode).Message;
+        /// <summary>
+        /// Gets a wait handle that is signalled when the root process exits.
+        /// </summary>
+        public WaitHandle ExitedHandle { get; private set; } = null!;
 
         /// <summary>
-        /// Gets the time the process was started.
+        /// Gets a wait handle that is signalled when every process in the job has exited.
         /// </summary>
-        public DateTime StartTime => this.GetProcessTimes().StartTime;
+        public WaitHandle AllProcessesExited => this.notifications.AllProcessesExited;
 
         /// <summary>
-        /// Gets the time that the process exited.
+        /// Gets a value indicating whether the job reported that a soft memory or processor time limit was
+        /// exceeded while the process was running.
         /// </summary>
-        public DateTime ExitTime => this.GetProcessTimes().ExitTime;
+        public bool NotificationLimitExceeded => this.notifications.NotificationLimitExceeded;
 
         /// <summary>
-        /// Gets the amount of time the process has spent running code inside the operating system core.
+        /// Gets a wait handle signalled as soon as the job reports that a soft limit was crossed, so a
+        /// program that goes over can be stopped immediately instead of running out its deadline.
         /// </summary>
-        public TimeSpan PrivilegedProcessorTime => this.GetProcessTimes().PrivilegedProcessorTime;
+        public WaitHandle NotificationLimitReached => this.notifications.NotificationLimitReached;
 
         /// <summary>
-        /// Gets the amount of time the associated process has spent running code inside the application portion of the process (not the operating system core).
+        /// Gets a value indicating whether the job reported that the disk write limit specifically was the
+        /// limit that was crossed. Read it before killing the process: the job keeps the violation record,
+        /// but there is no reason to make the caller guess which threshold fired.
         /// </summary>
-        public TimeSpan UserProcessorTime => this.GetProcessTimes().UserProcessorTime;
-
-        /// <summary>
-        /// Gets the amount of time the associated process has spent utilizing the CPU.
-        /// </summary>
-        public TimeSpan TotalProcessorTime => this.GetProcessTimes().TotalProcessorTime;
-
-        /// <summary>
-        /// Gets the name of the process.
-        /// Warning: If two processes with the same name are created, this property may not return correct name!
-        /// </summary>
-        public string Name
+        public bool DiskWriteLimitExceeded
         {
             get
             {
-                var fileNameOnly = new FileInfo(this.fileName).Name;
-                if (this.fileName.EndsWith(".exe"))
+                if (!this.notifications.NotificationLimitExceeded)
                 {
-                    return fileNameOnly.Substring(0, fileNameOnly.Length - 4);
+                    return false;
                 }
 
-                return fileNameOnly;
+                var violation = this.jobObject.GetLimitViolationInformation();
+                return (violation.ViolationLimitFlags & (uint)LimitFlags.JOB_OBJECT_LIMIT_JOB_WRITE_BYTES) != 0;
             }
         }
 
         /// <summary>
-        /// Gets the peak amount of memory (in bytes) committed by all processes ever associated with the job object.
-        /// The job object tracks this value even after the process has exited, which makes it more reliable
-        /// than sampling <see cref="PeakWorkingSetSize"/> for short-lived processes.
+        /// Gets the wall clock time between process creation and exit, computed from the raw file times so
+        /// it is unaffected by the local time zone or a daylight saving transition mid-run.
         /// </summary>
-        public long PeakJobMemoryUsed =>
-            this.jobObject == null
-                ? 0
-                : (long)(ulong)this.jobObject.GetExtendedLimitInformation().PeakJobMemoryUsed;
-
-        public long PeakWorkingSetSize
+        public TimeSpan WallClockTime
         {
             get
             {
-                var counters = default(ProcessMemoryCounters);
-                NativeMethods.GetProcessMemoryInfo(this.Handle, out counters, (uint)Marshal.SizeOf(counters));
-                return (long)counters.PeakWorkingSetSize;
+                var times = this.GetProcessTimes();
+                return times.Exit <= times.Create ? TimeSpan.Zero : TimeSpan.FromTicks(times.Exit - times.Create);
             }
         }
 
-        public long PeakPagefileUsage
+        /// <summary>
+        /// Gets the user-mode processor time accumulated by every process in the job, including ones that
+        /// have already exited.
+        /// </summary>
+        public TimeSpan UserProcessorTime => TimeSpan.FromTicks(this.jobObject.GetAccountingInformation().BasicInfo.TotalUserTime);
+
+        /// <summary>
+        /// Gets the kernel-mode processor time accumulated by every process in the job.
+        /// </summary>
+        public TimeSpan PrivilegedProcessorTime => TimeSpan.FromTicks(this.jobObject.GetAccountingInformation().BasicInfo.TotalKernelTime);
+
+        /// <summary>
+        /// Gets the total processor time accumulated by every process in the job.
+        /// </summary>
+        public TimeSpan TotalProcessorTime
         {
             get
             {
-                var counters = default(ProcessMemoryCounters);
-                NativeMethods.GetProcessMemoryInfo(this.Handle, out counters, (uint)Marshal.SizeOf(counters));
-                return (long)counters.PeakPagefileUsage;
+                var accounting = this.jobObject.GetAccountingInformation().BasicInfo;
+                return TimeSpan.FromTicks(accounting.TotalUserTime + accounting.TotalKernelTime);
             }
         }
 
-        public bool IsDisposed { get; private set; }
+        /// <summary>
+        /// Gets the peak memory committed by all processes ever associated with the job. The job keeps
+        /// this figure after the processes are gone, which makes it the dependable memory metric.
+        /// </summary>
+        public long PeakCommitBytes => (long)(ulong)this.jobObject.GetExtendedLimitInformation().PeakJobMemoryUsed;
 
-        public void Start(int timeLimit, int memoryLimit)
+        /// <summary>
+        /// Gets the highest peak working set observed for the root process. Working set is physical
+        /// residency, so it depends on system memory pressure and is not reproducible between machines;
+        /// <see cref="PeakCommitBytes"/> is the better metric for judging.
+        /// </summary>
+        public long PeakWorkingSetBytes => Interlocked.Read(ref this.peakWorkingSetBytes);
+
+        /// <summary>
+        /// Gets the I/O accumulated by every process in the job.
+        /// </summary>
+        public ProcessIoStatistics IoStatistics
         {
-            try
+            get
             {
-                var multiplier = Math.Max(1.0, this.options.JobLimitsMultiplier);
-                var jobMemoryLimit = (int)Math.Min(int.MaxValue, memoryLimit * multiplier);
-
-                this.jobObject = new JobObject();
-                this.jobObject.SetExtendedLimitInformation(PrepareJobObject.GetExtendedLimitInformation(this.options, jobMemoryLimit));
-                this.jobObject.SetBasicUiRestrictions(PrepareJobObject.GetUiRestrictions());
-
-                if (this.options.CpuRateLimitPercent.HasValue)
-                {
-                    var percent = Math.Min(100, Math.Max(1, this.options.CpuRateLimitPercent.Value));
-                    this.jobObject.SetCpuRateControlInformation(new CpuRateControlInformation
-                    {
-                        ControlFlags = CpuRateControlInformation.FlagEnable | CpuRateControlInformation.FlagHardCap,
-                        CpuRate = (uint)(percent * 100),
-                    });
-                }
-
-                if (!this.jobObject.AddProcess(this.processInformation.Process))
-                {
-                    throw new Win32Exception();
-                }
-
-                NativeMethods.ResumeThread(this.processInformation.Thread);
+                var io = this.jobObject.GetAccountingInformation().IoInfo;
+                return new ProcessIoStatistics(io.ReadOperationCount, io.WriteOperationCount, io.ReadTransferCount, io.WriteTransferCount);
             }
-            catch (Win32Exception)
+        }
+
+        /// <summary>
+        /// Reads the current peak working set of the root process and folds it into
+        /// <see cref="PeakWorkingSetBytes"/>. Cheap enough to call at the interesting moments (before a
+        /// kill, right after exit) instead of on a timer.
+        /// </summary>
+        public void SampleWorkingSet()
+        {
+            if (this.safeProcessHandle.IsInvalid || this.safeProcessHandle.IsClosed)
             {
+                return;
+            }
+
+            var counters = default(ProcessMemoryCounters);
+            if (!NativeMethods.GetProcessMemoryInfo(this.safeProcessHandle, out counters, (uint)Marshal.SizeOf(counters)))
+            {
+                return;
+            }
+
+            var peak = (long)counters.PeakWorkingSetSize;
+            long current;
+            while ((current = Interlocked.Read(ref this.peakWorkingSetBytes)) < peak)
+            {
+                if (Interlocked.CompareExchange(ref this.peakWorkingSetBytes, peak, current) == current)
+                {
+                    break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Resumes the suspended process.
+        /// </summary>
+        public void Start()
+        {
+            if (NativeMethods.ResumeThread(this.mainThreadHandle) == unchecked((uint)-1))
+            {
+                var failure = SandboxException.FromLastWin32Error(SandboxStep.ResumeThread);
                 this.Kill();
-                throw;
+                throw failure;
             }
         }
 
+        /// <summary>
+        /// Terminates the whole job. Safe to call from any thread, more than once, and after
+        /// <see cref="Dispose"/> - the executor kills from I/O continuations that can outlive the run.
+        /// </summary>
         public void Kill()
         {
-            // Terminate the whole job so anything that slipped in dies too, then make sure
-            // the main process is gone even if it was never assigned to a job.
-            this.jobObject?.Terminate(unchecked((uint)-1));
-            NativeMethods.TerminateProcess(this.safeProcessHandle, -1);
+            if (Interlocked.Exchange(ref this.killed, 1) != 0)
+            {
+                return;
+            }
+
+            this.SampleWorkingSet();
+
+            // Terminating the job takes the whole tree, including anything that slipped past the active
+            // process limit. The direct TerminateProcess is a fallback for the case where the process was
+            // never successfully assigned to the job.
+            this.jobObject.Terminate(unchecked((uint)-1));
+
+            if (!this.safeProcessHandle.IsInvalid && !this.safeProcessHandle.IsClosed)
+            {
+                NativeMethods.TerminateProcess(this.safeProcessHandle, -1);
+            }
         }
 
-        public bool WaitForExit(int milliseconds)
-        {
-            var result = NativeMethods.WaitForSingleObject(this.processInformation.Process, (uint)milliseconds);
-            return result != NativeMethods.WAIT_TIMEOUT;
-        }
-
+        /// <inheritdoc/>
         public void Dispose()
         {
-            this.Dispose(true);
+            if (Interlocked.Exchange(ref this.disposed, 1) != 0)
+            {
+                return;
+            }
+
+            this.notifications.Dispose();
+
+            if (this.mainThreadHandle != IntPtr.Zero)
+            {
+                NativeMethods.CloseHandle(this.mainThreadHandle);
+                this.mainThreadHandle = IntPtr.Zero;
+            }
+
+            this.ExitedHandle?.Dispose();
+            this.safeProcessHandle?.Dispose();
+
+            // Disposing the job kills anything still inside it (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE).
+            this.jobObject.Dispose();
+            this.desktop?.Dispose();
+            this.appContainer?.Dispose();
+            this.writableDirectories?.Dispose();
+
+            // The standard IO streams are intentionally left alone: closing them here throws
+            // InvalidOperationException when an asynchronous read is still in flight, and the underlying
+            // handles are released by their finalizers once the readers finish.
         }
 
-        protected virtual void Dispose(bool disposing)
+        /// <summary>
+        /// Rejects option combinations that cannot work, rather than letting them fail later as an
+        /// unexplained start-up error.
+        /// </summary>
+        private static void ValidateOptions(RestrictedProcessOptions options)
         {
-            if (disposing)
+            if (options.BlockNetworkAccess && options.UseAlternateDesktop)
             {
-                this.IsDisposed = true;
-                this.safeProcessHandle.Dispose();
-                NativeMethods.CloseHandle(this.processInformation.Thread);
-                this.jobObject?.Dispose();
-                this.desktop?.Dispose();
-                if (this.appContainerSid != IntPtr.Zero)
-                {
-                    NativeMethods.FreeSid(this.appContainerSid);
-                    this.appContainerSid = IntPtr.Zero;
-                }
-
-                if (this.appContainerName != null)
-                {
-                    NativeMethods.DeleteAppContainerProfile(this.appContainerName);
-                    this.appContainerName = null;
-                }
-
-                // Disposing these object causes "System.InvalidOperationException: The stream is currently in use by a previous operation on the stream."
-                // this.StandardInput.Dispose();
-                // this.StandardOutput.Dispose();
-                // this.StandardError.Dispose();
+                // An AppContainer process cannot attach to a desktop this library creates. It has been
+                // tested against every security descriptor the desktop can be given - any DACL, any
+                // mandatory label, on the current window station and on a private one - and the child
+                // always dies during user32 initialisation with ERROR_DLL_INIT_FAILED. Only the desktop
+                // the parent is already attached to works. Rather than hand back a process that cannot
+                // start, say so, and let the caller decide which boundary matters more for the workload.
+                var detail = "BlockNetworkAccess cannot be combined with UseAlternateDesktop: a process "
+                             + "running in an AppContainer cannot attach to a desktop created by the "
+                             + "sandbox, and fails to start. Set UseAlternateDesktop to false to keep the "
+                             + "network block (the job object still denies clipboard access, global atoms "
+                             + "and USER handles from outside the job), or set BlockNetworkAccess to false "
+                             + "to keep the throwaway desktop.";
+                throw SandboxException.For(SandboxStep.CreateDesktop, detail);
             }
         }
 
         /// <summary>
-        /// Gets the encoding matching the system's active ANSI code page, which is the encoding
-        /// console child processes use for redirected standard IO by default.
-        /// On .NET Framework this is what <see cref="Encoding.Default"/> returns, but on modern
-        /// .NET <see cref="Encoding.Default"/> is always UTF-8, so the code page is resolved explicitly.
+        /// Gets the encoding matching the system's active ANSI code page, which is what console child
+        /// processes write to a redirected standard output by default. On modern .NET
+        /// <see cref="Encoding.Default"/> is always UTF-8, so the code page is resolved explicitly.
         /// </summary>
         private static Encoding GetAnsiEncoding()
         {
@@ -388,58 +491,13 @@ namespace RestrictedProcess.Process
             }
         }
 
-        private static IntPtr ConvertStringSidToSid(string stringSid, List<IntPtr> sidsToFree)
+        private static string GetEnvironmentVariableOrEmpty(string name)
         {
-            if (!NativeMethods.ConvertStringSidToSid(stringSid, out var sid))
-            {
-                throw new Win32Exception();
-            }
-
-            sidsToFree.Add(sid);
-            return sid;
+            return Environment.GetEnvironmentVariable(name) ?? string.Empty;
         }
 
         /// <summary>
-        /// Gets the logon SID of the given token (the group carrying the SE_GROUP_LOGON_ID attribute).
-        /// Returns the buffer holding the TOKEN_GROUPS structure the SID points into;
-        /// the caller must free it with <see cref="Marshal.FreeHGlobal"/> after the SID is no longer needed.
-        /// </summary>
-        private static IntPtr GetLogonSid(IntPtr token, out IntPtr logonSid)
-        {
-            logonSid = IntPtr.Zero;
-            NativeMethods.GetTokenInformation(token, TokenInformationClass.TokenGroups, IntPtr.Zero, 0, out var length);
-            if (length == 0)
-            {
-                return IntPtr.Zero;
-            }
-
-            var buffer = Marshal.AllocHGlobal(length);
-            if (!NativeMethods.GetTokenInformation(token, TokenInformationClass.TokenGroups, buffer, length, out length))
-            {
-                Marshal.FreeHGlobal(buffer);
-                throw new Win32Exception();
-            }
-
-            // TOKEN_GROUPS layout: DWORD GroupCount (padded to pointer size), then SID_AND_ATTRIBUTES[GroupCount]
-            var groupCount = Marshal.ReadInt32(buffer);
-            var sizeOfEntry = Marshal.SizeOf<SidAndAttributes>();
-            for (var i = 0; i < groupCount; i++)
-            {
-                var entry = Marshal.PtrToStructure<SidAndAttributes>(buffer + IntPtr.Size + (i * sizeOfEntry));
-                if ((entry.Attributes & NativeMethods.SE_GROUP_LOGON_ID) == NativeMethods.SE_GROUP_LOGON_ID)
-                {
-                    logonSid = entry.Sid;
-                    return buffer;
-                }
-            }
-
-            Marshal.FreeHGlobal(buffer);
-            return IntPtr.Zero;
-        }
-
-        /// <summary>
-        /// Builds a double-null-terminated, case-insensitively sorted Unicode environment block
-        /// for the child process, marshaled to unmanaged memory the caller must free.
+        /// Builds a double-null-terminated, case-insensitively sorted Unicode environment block.
         /// </summary>
         private static IntPtr BuildEnvironmentBlock(IDictionary<string, string> variables)
         {
@@ -453,154 +511,203 @@ namespace RestrictedProcess.Process
             return Marshal.StringToHGlobalUni(builder.ToString());
         }
 
-        private static string GetEnvironmentVariableOrEmpty(string name)
+        private IReadOnlyList<SecurityIdentifier> BuildDesktopAllowedSids(SandboxToken token)
         {
-            return Environment.GetEnvironmentVariable(name) ?? string.Empty;
+            // The logon SID is the one group that stays enabled at every token level, so it is what the
+            // first access check matches; the unique run SID is in the restricting list, so it is what the
+            // second check matches. Both have to be present, and both are taken from the token that was
+            // actually built rather than re-derived, so the DACL can never disagree with the token.
+            var sids = new List<SecurityIdentifier>
+            {
+                this.uniqueRunSid,
+                token.UserSid,
+            };
+
+            if (token.LogonSid != null)
+            {
+                sids.Add(token.LogonSid);
+            }
+
+            if (this.options.BlockNetworkAccess)
+            {
+                // An AppContainer process presents its package SID, and ALL APPLICATION PACKAGES unless it
+                // is a Less Privileged AppContainer.
+                if (this.appContainer != null)
+                {
+                    sids.Add(this.appContainer.SecurityIdentifier);
+                }
+
+                if (!this.options.UseLowPrivilegeAppContainer)
+                {
+                    sids.Add(SidFactory.AllApplicationPackages);
+                }
+            }
+
+            return sids;
         }
 
-        /// <summary>
-        /// Grants the "ALL APPLICATION PACKAGES" identity (S-1-15-2-1) read and execute rights on the
-        /// executable and traverse rights on its directory, so a process running in an AppContainer
-        /// can load it. Uses icacls because it is inbox on every supported Windows version and needs
-        /// no additional access-control package for netstandard2.0.
-        /// </summary>
-        private static void GrantAllApplicationPackagesAccess(string fileName, string? workingDirectory)
+        private void ConfigureJob(RestrictedProcessStartInfo startInfo)
         {
-            RunIcacls(fileName, "(RX)");
-            if (!string.IsNullOrEmpty(workingDirectory))
+            var multiplier = Math.Max(1.0, this.options.JobLimitsMultiplier);
+            var hardMemoryLimit = startInfo.MemoryLimitBytes.HasValue
+                ? (long)Math.Min(long.MaxValue, startInfo.MemoryLimitBytes.Value * multiplier)
+                : 0;
+
+            this.jobObject.SetExtendedLimitInformation(
+                PrepareJobObject.GetExtendedLimitInformation(this.options, hardMemoryLimit));
+            this.jobObject.SetBasicUiRestrictions(PrepareJobObject.GetUiRestrictions());
+
+            if (this.options.CpuRateLimitPercent.HasValue)
             {
-                RunIcacls(workingDirectory!, "(RX)");
+                var percent = Math.Min(100, Math.Max(1, this.options.CpuRateLimitPercent.Value));
+                this.jobObject.SetCpuRateControlInformation(new CpuRateControlInformation
+                {
+                    ControlFlags = CpuRateControlInformation.FlagEnable | CpuRateControlInformation.FlagHardCap,
+                    CpuRate = (uint)(percent * 100),
+                });
+            }
+
+            var notificationLimits = PrepareJobObject.GetNotificationLimits(
+                startInfo.MemoryLimitBytes, startInfo.CpuTimeLimit, this.options.MaxDiskWriteBytes);
+            if (notificationLimits.HasValue)
+            {
+                this.jobObject.TrySetNotificationLimits(notificationLimits.Value);
             }
         }
 
-        private static void RunIcacls(string path, string rights)
+        private ProcThreadAttributeList CreateProcThreadAttributeList(StartupInfo startupInfo, out bool assignToJobAfterCreation)
         {
-            var startInfo = new ProcessStartInfo("icacls")
-            {
-                Arguments = $"\"{path}\" /grant *S-1-15-2-1:{rights}",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
+            assignToJobAfterCreation = false;
 
-            using (var process = System.Diagnostics.Process.Start(startInfo))
+            var attributeCount = 2 // handle list and job list, both always used
+                                 + ((this.options.Mitigations != ProcessMitigations.None
+                                     || this.options.Mitigations2 != ProcessMitigations2.None) ? 1 : 0)
+                                 + (this.options.DisallowChildProcesses ? 2 : 0)
+                                 + (this.options.BlockNetworkAccess ? 1 : 0)
+                                 + (this.options.BlockNetworkAccess && this.options.UseLowPrivilegeAppContainer ? 1 : 0);
+
+            var attributeList = new ProcThreadAttributeList(attributeCount);
+            try
             {
-                if (process == null)
+                if (this.options.RestrictInheritedHandles)
                 {
-                    throw new InvalidOperationException("Could not start icacls to grant AppContainer access.");
+                    attributeList.SetHandleList(
+                        new[]
+                        {
+                            startupInfo.StandardInputHandle!.DangerousGetHandle(),
+                            startupInfo.StandardOutputHandle!.DangerousGetHandle(),
+                            startupInfo.StandardErrorHandle!.DangerousGetHandle(),
+                        });
                 }
 
-                process.WaitForExit();
+                try
+                {
+                    attributeList.SetJobList(new[] { this.jobObject.Handle.DangerousGetHandle() });
+                }
+                catch (SandboxException)
+                {
+                    // Very old builds do not support attaching a job at creation. Falling back to
+                    // AssignProcessToJobObject on the suspended process is still safe, just less tidy.
+                    assignToJobAfterCreation = true;
+                }
 
-                // Best effort: the executable may already be accessible to application packages
-                // (for example a system executable), in which case granting access can fail and is
-                // not required. Read the streams to avoid leaving the pipes full.
-                process.StandardError.ReadToEnd();
-                process.StandardOutput.ReadToEnd();
+                if (this.options.Mitigations != ProcessMitigations.None
+                    || this.options.Mitigations2 != ProcessMitigations2.None)
+                {
+                    attributeList.SetMitigationPolicy((ulong)this.options.Mitigations, (ulong)this.options.Mitigations2);
+                }
+
+                if (this.options.DisallowChildProcesses)
+                {
+                    attributeList.SetChildProcessRestricted();
+                    attributeList.SetDesktopAppBreakawayDisabled();
+                }
+
+                if (this.options.BlockNetworkAccess && this.appContainer != null)
+                {
+                    attributeList.SetSecurityCapabilities(this.appContainer.Sid);
+
+                    if (this.options.UseLowPrivilegeAppContainer)
+                    {
+                        attributeList.SetLowPrivilegeAppContainer();
+                    }
+                }
+
+                return attributeList;
+            }
+            catch
+            {
+                attributeList.Dispose();
+                throw;
             }
         }
 
         private void RedirectStandardIoHandles(ref StartupInfo startupInfo, int bufferSize, Encoding encoding)
         {
-            // Some of this code is based on System.Diagnostics.Process.StartWithCreateProcess method implementation
-            SafeFileHandle standardInputWritePipeHandle;
-            SafeFileHandle standardOutputReadPipeHandle;
-            SafeFileHandle standardErrorReadPipeHandle;
-
-            // http://support.microsoft.com/kb/190351 (How to spawn console processes with redirected standard handles)
-            // If the dwFlags member is set to STARTF_USESTDHANDLES, then the following STARTUPINFO members specify the standard handles of the child console based process:
-            // HANDLE hStdInput - Standard input handle of the child process.
-            // HANDLE hStdOutput - Standard output handle of the child process.
-            // HANDLE hStdError - Standard error handle of the child process.
             startupInfo.Flags = (int)StartupInfoFlags.STARTF_USESTDHANDLES;
-            this.CreatePipe(out standardInputWritePipeHandle, out startupInfo.StandardInputHandle, true, bufferSize);
-            this.CreatePipe(out standardOutputReadPipeHandle, out startupInfo.StandardOutputHandle, false, bufferSize);
-            this.CreatePipe(out standardErrorReadPipeHandle, out startupInfo.StandardErrorHandle, false, 4096);
+            this.CreatePipe(out var standardInputWrite, out startupInfo.StandardInputHandle, true, bufferSize);
+            this.CreatePipe(out var standardOutputRead, out startupInfo.StandardOutputHandle, false, bufferSize);
+            this.CreatePipe(out var standardErrorRead, out startupInfo.StandardErrorHandle, false, bufferSize);
 
-            this.StandardInput = new StreamWriter(new FileStream(standardInputWritePipeHandle, FileAccess.Write, bufferSize, false), encoding, bufferSize)
-                                     {
-                                         AutoFlush = true,
-                                     };
-            this.StandardOutput = new StreamReader(new FileStream(standardOutputReadPipeHandle, FileAccess.Read, bufferSize, false), encoding, true, bufferSize);
-            this.StandardError = new StreamReader(new FileStream(standardErrorReadPipeHandle, FileAccess.Read, 4096, false), encoding, true, 4096);
-
-            /*
-             * Child processes that use such C run-time functions as printf() and fprintf() can behave poorly when redirected.
-             * The C run-time functions maintain separate IO buffers. When redirected, these buffers might not be flushed immediately after each IO call.
-             * As a result, the output to the redirection pipe of a printf() call or the input from a getch() call is not flushed immediately and delays, sometimes-infinite delays occur.
-             * This problem is avoided if the child process flushes the IO buffers after each call to a C run-time IO function.
-             * Only the child process can flush its C run-time IO buffers. A process can flush its C run-time IO buffers by calling the fflush() function.
-             */
-        }
-
-        private void CreatePipeWithSecurityAttributes(out SafeFileHandle readPipe, out SafeFileHandle writePipe, SecurityAttributes pipeAttributes, int size)
-        {
-            if (!NativeMethods.CreatePipe(out readPipe, out writePipe, pipeAttributes, size) || readPipe.IsInvalid
-                || writePipe.IsInvalid)
+            this.StandardInput = new StreamWriter(
+                new FileStream(standardInputWrite, FileAccess.Write, bufferSize, false), encoding, bufferSize)
             {
-                throw new Win32Exception();
-            }
+                AutoFlush = true,
+            };
+            this.StandardOutput = new StreamReader(
+                new FileStream(standardOutputRead, FileAccess.Read, bufferSize, false), encoding, true, bufferSize);
+            this.StandardError = new StreamReader(
+                new FileStream(standardErrorRead, FileAccess.Read, bufferSize, false), encoding, true, bufferSize);
         }
 
-        // Using synchronous Anonymous pipes for process input/output redirection means we would end up
-        // wasting a worker thread pool thread per pipe instance. Overlapped pipe IO is desirable, since
-        // it will take advantage of the NT IO completion port infrastructure. But we can't really use
-        // Overlapped I/O for process input/output as it would break Console apps (managed Console class
-        // methods such as WriteLine as well as native CRT functions like printf) which are making an
-        // assumption that the console standard handles (obtained via GetStdHandle()) are opened
-        // for synchronous I/O and hence they can work fine with ReadFile/WriteFile synchronously!
         private void CreatePipe(out SafeFileHandle parentHandle, out SafeFileHandle childHandle, bool parentInputs, int bufferSize)
         {
-            var securityAttributesParent = new SecurityAttributes { InheritHandle = true };
+            var attributes = SecurityAttributes.Create(inheritHandle: true);
 
             SafeFileHandle? tempHandle = null;
             try
             {
                 if (parentInputs)
                 {
-                    this.CreatePipeWithSecurityAttributes(out childHandle, out tempHandle, securityAttributesParent, bufferSize);
+                    if (!NativeMethods.CreatePipe(out childHandle, out tempHandle, ref attributes, bufferSize))
+                    {
+                        throw SandboxException.FromLastWin32Error(SandboxStep.CreatePipe);
+                    }
                 }
                 else
                 {
-                    this.CreatePipeWithSecurityAttributes(out tempHandle, out childHandle, securityAttributesParent, bufferSize);
+                    if (!NativeMethods.CreatePipe(out tempHandle, out childHandle, ref attributes, bufferSize))
+                    {
+                        throw SandboxException.FromLastWin32Error(SandboxStep.CreatePipe);
+                    }
                 }
 
-                // Duplicate the parent handle to be non-inheritable so that the child process
-                // doesn't have access. This is done for correctness sake, exact reason is unclear.
-                // One potential theory is that child process can do something brain dead like
-                // closing the parent end of the pipe and there by getting into a blocking situation
-                // as parent will not be draining the pipe at the other end anymore.
-
-                // Create a duplicate of the output write handle for the std error write handle.
-                // This is necessary in case the child application closes one of its std output handles.
+                // Duplicate the parent end as non-inheritable so the child never gets a copy: if it closed
+                // the parent's end of its own output pipe the parent would block reading a pipe nobody can
+                // write to.
                 if (!NativeMethods.DuplicateHandle(
                         new HandleRef(this, NativeMethods.GetCurrentProcess()),
                         tempHandle,
                         new HandleRef(this, NativeMethods.GetCurrentProcess()),
-                        out parentHandle, // Address of new handle.
+                        out parentHandle,
                         0,
-                        false, // Make it un-inheritable.
+                        false,
                         (int)DuplicateOptions.DUPLICATE_SAME_ACCESS))
                 {
-                    throw new Win32Exception();
+                    throw SandboxException.FromLastWin32Error(SandboxStep.DuplicateHandle);
                 }
             }
             finally
             {
-                // Close inheritable copies of the handles you do not want to be inherited.
-                if (tempHandle != null && !tempHandle.IsInvalid)
-                {
-                    tempHandle.Close();
-                }
+                tempHandle?.Dispose();
             }
         }
 
         /// <summary>
-        /// Builds the environment block passed to the child process, honoring
+        /// Builds the environment block for the child, honouring
         /// <see cref="RestrictedProcessOptions.ScrubEnvironment"/> and
-        /// <see cref="RestrictedProcessOptions.AdditionalEnvironmentVariables"/>.
-        /// Returns <see cref="IntPtr.Zero"/> to inherit the parent's environment unchanged.
+        /// <see cref="RestrictedProcessOptions.AdditionalEnvironmentVariables"/>. Returns
+        /// <see cref="IntPtr.Zero"/> to inherit the parent's environment unchanged.
         /// </summary>
         private IntPtr CreateEnvironmentBlock(string? workingDirectory)
         {
@@ -610,7 +717,6 @@ namespace RestrictedProcess.Process
             {
                 if (additional.Count == 0)
                 {
-                    // Inherit the parent's environment unchanged (the historical behavior).
                     return IntPtr.Zero;
                 }
 
@@ -628,7 +734,6 @@ namespace RestrictedProcess.Process
                 return BuildEnvironmentBlock(merged);
             }
 
-            // A minimal environment holding only what a console program typically needs to run.
             var systemRoot = GetEnvironmentVariableOrEmpty("SystemRoot");
             var temp = string.IsNullOrEmpty(workingDirectory) ? GetEnvironmentVariableOrEmpty("TEMP") : workingDirectory!;
             var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -648,8 +753,8 @@ namespace RestrictedProcess.Process
 
             if (this.options.BlockNetworkAccess)
             {
-                // Creating an AppContainer process fails (ERROR_ENVVAR_NOT_FOUND) unless these
-                // profile variables, which the container uses to resolve its private storage, are present.
+                // Creating an AppContainer process fails with ERROR_ENVVAR_NOT_FOUND unless these profile
+                // variables, which the container uses to resolve its private storage, are present.
                 foreach (var name in new[] { "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ALLUSERSPROFILE", "ProgramData", "HOMEDRIVE", "HOMEPATH", "USERNAME" })
                 {
                     variables[name] = GetEnvironmentVariableOrEmpty(name);
@@ -664,198 +769,6 @@ namespace RestrictedProcess.Process
             return BuildEnvironmentBlock(variables);
         }
 
-        /// <summary>
-        /// Builds the PROC_THREAD_ATTRIBUTE_LIST carrying the enabled process creation hardening:
-        /// the inheritable handle whitelist (only the three standard IO pipes), the mitigation
-        /// policies and the child process creation ban. Returns null when nothing is enabled.
-        /// </summary>
-        private ProcThreadAttributeList? CreateProcThreadAttributeList(StartupInfo startupInfo)
-        {
-            var attributeCount = (this.options.RestrictInheritedHandles ? 1 : 0)
-                                 + (this.options.Mitigations != ProcessMitigations.None ? 1 : 0)
-                                 + (this.options.DisallowChildProcesses ? 1 : 0)
-                                 + (this.options.BlockNetworkAccess ? 1 : 0);
-            if (attributeCount == 0)
-            {
-                return null;
-            }
-
-            var attributeList = new ProcThreadAttributeList(attributeCount);
-            try
-            {
-                if (this.options.RestrictInheritedHandles)
-                {
-                    attributeList.SetHandleList(
-                        new[]
-                        {
-                            startupInfo.StandardInputHandle!.DangerousGetHandle(),
-                            startupInfo.StandardOutputHandle!.DangerousGetHandle(),
-                            startupInfo.StandardErrorHandle!.DangerousGetHandle(),
-                        });
-                }
-
-                if (this.options.Mitigations != ProcessMitigations.None)
-                {
-                    attributeList.SetMitigationPolicy((ulong)this.options.Mitigations);
-                }
-
-                if (this.options.DisallowChildProcesses)
-                {
-                    attributeList.SetChildProcessRestricted();
-                }
-
-                if (this.options.BlockNetworkAccess)
-                {
-                    attributeList.SetSecurityCapabilities(this.appContainerSid);
-                }
-
-                return attributeList;
-            }
-            catch
-            {
-                attributeList.Dispose();
-                throw;
-            }
-        }
-
-        private IntPtr CreateRestrictedToken(TokenLevel tokenLevel)
-        {
-            // Open the current process and grab its primary token
-            IntPtr processToken;
-            if (!NativeMethods.OpenProcessToken(
-                    NativeMethods.GetCurrentProcess(),
-                    NativeMethods.TOKEN_DUPLICATE | NativeMethods.TOKEN_ASSIGN_PRIMARY | NativeMethods.TOKEN_QUERY | NativeMethods.TOKEN_ADJUST_DEFAULT,
-                    out processToken))
-            {
-                throw new Win32Exception();
-            }
-
-            var sidsToFree = new List<IntPtr>();
-            var logonSidBuffer = IntPtr.Zero;
-            try
-            {
-                // Remove all privileges except SeChangeNotifyPrivilege and convert the
-                // Administrators group to deny-only, so a sandbox running in an elevated
-                // host cannot use administrative rights.
-                var flags = tokenLevel == TokenLevel.Unrestricted
-                    ? default(CreateRestrictedTokenFlags)
-                    : CreateRestrictedTokenFlags.DISABLE_MAX_PRIVILEGE;
-
-                SidAndAttributes[]? sidsToDisable = null;
-                if (tokenLevel >= TokenLevel.Limited)
-                {
-                    sidsToDisable = new[]
-                    {
-                        new SidAndAttributes { Sid = ConvertStringSidToSid(NativeMethods.SID_BUILTIN_ADMINISTRATORS, sidsToFree) },
-                    };
-                }
-
-                // Restricting SIDs add a second access check evaluated only against this list,
-                // mirroring the Chromium sandbox USER_LIMITED token level.
-                SidAndAttributes[]? sidsToRestrict = null;
-                if (tokenLevel >= TokenLevel.Restricted)
-                {
-                    var restrictedSids = new List<SidAndAttributes>
-                    {
-                        new SidAndAttributes { Sid = ConvertStringSidToSid(NativeMethods.SID_EVERYONE, sidsToFree) },
-                        new SidAndAttributes { Sid = ConvertStringSidToSid(NativeMethods.SID_BUILTIN_USERS, sidsToFree) },
-                        new SidAndAttributes { Sid = ConvertStringSidToSid(NativeMethods.SID_RESTRICTED, sidsToFree) },
-                    };
-
-                    logonSidBuffer = GetLogonSid(processToken, out var logonSid);
-                    if (logonSid != IntPtr.Zero)
-                    {
-                        restrictedSids.Add(new SidAndAttributes { Sid = logonSid });
-                    }
-
-                    sidsToRestrict = restrictedSids.ToArray();
-                }
-
-                IntPtr restrictedToken;
-                if (!NativeMethods.CreateRestrictedToken(
-                        processToken,
-                        flags,
-                        sidsToDisable?.Length ?? 0,
-                        sidsToDisable,
-                        0, // Delete privilege (superseded by DISABLE_MAX_PRIVILEGE)
-                        null,
-                        sidsToRestrict?.Length ?? 0,
-                        sidsToRestrict,
-                        out restrictedToken))
-                {
-                    throw new Win32Exception();
-                }
-
-                return restrictedToken;
-            }
-            finally
-            {
-                foreach (var sid in sidsToFree)
-                {
-                    NativeMethods.LocalFree(sid);
-                }
-
-                if (logonSidBuffer != IntPtr.Zero)
-                {
-                    Marshal.FreeHGlobal(logonSidBuffer);
-                }
-
-                NativeMethods.CloseHandle(processToken);
-            }
-        }
-
-        private void SetTokenMandatoryLabel(IntPtr token, SecurityMandatoryLabel securityMandatoryLabel)
-        {
-            // Create the low integrity SID.
-            IntPtr integritySid;
-            if (!NativeMethods.AllocateAndInitializeSid(
-                    ref NativeMethods.SECURITY_MANDATORY_LABEL_AUTHORITY,
-                    1,
-                    (int)securityMandatoryLabel,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    out integritySid))
-            {
-                throw new Win32Exception();
-            }
-
-            var tokenInfo = IntPtr.Zero;
-            try
-            {
-                var tokenMandatoryLabel = new TokenMandatoryLabel { Label = default(SidAndAttributes) };
-                tokenMandatoryLabel.Label.Attributes = NativeMethods.SE_GROUP_INTEGRITY;
-                tokenMandatoryLabel.Label.Sid = integritySid;
-                //// Marshal the TOKEN_MANDATORY_LABEL structure to the native memory.
-                var sizeOfTokenMandatoryLabel = Marshal.SizeOf(tokenMandatoryLabel);
-                tokenInfo = Marshal.AllocHGlobal(sizeOfTokenMandatoryLabel);
-                Marshal.StructureToPtr(tokenMandatoryLabel, tokenInfo, false);
-
-                // Set the integrity level in the access token
-                if (!NativeMethods.SetTokenInformation(
-                        token,
-                        TokenInformationClass.TokenIntegrityLevel,
-                        tokenInfo,
-                        sizeOfTokenMandatoryLabel + NativeMethods.GetLengthSid(integritySid)))
-                {
-                    throw new Win32Exception();
-                }
-            }
-            finally
-            {
-                if (tokenInfo != IntPtr.Zero)
-                {
-                    Marshal.FreeHGlobal(tokenInfo);
-                }
-
-                NativeMethods.FreeSid(integritySid);
-            }
-        }
-
         private ProcessThreadTimes GetProcessTimes()
         {
             var processTimes = default(ProcessThreadTimes);
@@ -866,7 +779,7 @@ namespace RestrictedProcess.Process
                     out processTimes.Kernel,
                     out processTimes.User))
             {
-                throw new Win32Exception();
+                throw SandboxException.FromLastWin32Error(SandboxStep.QueryProcessTimes);
             }
 
             return processTimes;

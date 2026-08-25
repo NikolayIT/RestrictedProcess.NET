@@ -6,22 +6,31 @@
 namespace RestrictedProcess.Process
 {
     using System;
-    using System.Diagnostics.CodeAnalysis;
     using System.Runtime.InteropServices;
 
-    [SuppressMessage("StyleCop.CSharp.MaintainabilityRules", "SA1401:FieldsMustBePrivate", Justification = "Reviewed. Suppression is OK here.")]
+    /// <summary>
+    /// SECURITY_ATTRIBUTES. Use <see cref="Create"/> rather than the default value: nLength has to be the
+    /// real size of the structure, which is 24 bytes on x64 and 12 on x86, and Windows validates it for
+    /// some of the APIs that take this structure.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    internal class SecurityAttributes : IDisposable
+    internal struct SecurityAttributes
     {
-        public int Length = 12;
+        public int Length;
 
-        public SafeLocalMemHandle SecurityDescriptor = new SafeLocalMemHandle(IntPtr.Zero, false);
+        public IntPtr SecurityDescriptor;
 
-        public bool InheritHandle = false;
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool InheritHandle;
 
-        public void Dispose()
+        public static SecurityAttributes Create(bool inheritHandle = false, IntPtr securityDescriptor = default)
         {
-            this.SecurityDescriptor.Dispose();
+            return new SecurityAttributes
+            {
+                Length = Marshal.SizeOf<SecurityAttributes>(),
+                SecurityDescriptor = securityDescriptor,
+                InheritHandle = inheritHandle,
+            };
         }
     }
 }

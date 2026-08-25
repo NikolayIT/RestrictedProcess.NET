@@ -6,33 +6,38 @@
 namespace RestrictedProcess
 {
     /// <summary>
-    /// The process execution result type.
+    /// How a sandboxed run ended.
     /// </summary>
     public enum ProcessExecutionResultType
     {
         /// <summary>
-        /// Success result.
+        /// The program ran to completion within every limit.
         /// </summary>
         Success = 0,
 
         /// <summary>
-        /// Time limit result.
+        /// The program exceeded its processor time limit or its wall-clock deadline.
         /// </summary>
         TimeLimit = 1,
 
         /// <summary>
-        /// Memory limit result.
+        /// The program exceeded its memory limit.
         /// </summary>
         MemoryLimit = 2,
 
         /// <summary>
-        /// Run time error result.
+        /// The program wrote to standard error, exited with a non-zero code, or crashed.
         /// </summary>
-        RunTimeError = 4,
+        RunTimeError = 3,
 
         /// <summary>
-        /// The process produced more output than the configured limit and was stopped.
+        /// The program produced more output than the configured cap allows.
         /// </summary>
-        OutputLimit = 8,
+        OutputLimit = 4,
+
+        /// <summary>
+        /// The caller cancelled the execution before it finished.
+        /// </summary>
+        Cancelled = 5,
     }
 }

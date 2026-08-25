@@ -10,34 +10,63 @@ namespace RestrictedProcess.JobObjects
 
     internal static class NativeMethods
     {
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        internal static extern IntPtr CreateJobObject([In]ref SecurityAttributes jobAttributes, string? name);
+        public const uint Infinite = 0xFFFFFFFF;
+
+        public static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern SafeJobObjectHandle CreateJobObject(IntPtr jobAttributes, string? name);
 
         [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool SetInformationJobObject(
-            IntPtr job,
+            SafeJobObjectHandle job,
             InfoClass infoType,
             IntPtr jobObjectInfo,
             uint jobObjectInfoLength);
 
         [DllImport("kernel32.dll", SetLastError = true)]
-        internal static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        internal static extern bool TerminateJobObject(IntPtr job, uint exitCode);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool QueryInformationJobObject(
-            IntPtr job,
+            SafeJobObjectHandle job,
             InfoClass jobObjectInformationClass,
             IntPtr jobObjectInfo,
             uint jobObjectInfoLength,
             IntPtr returnLength);
 
-        [DllImport("user32.dll", SetLastError = true)]
-        internal static extern uint GetWindowThreadProcessId(IntPtr windowHandler, out uint processId);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool AssignProcessToJobObject(SafeJobObjectHandle job, IntPtr process);
 
         [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool TerminateJobObject(SafeJobObjectHandle job, uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern SafeIoCompletionPortHandle CreateIoCompletionPort(
+            IntPtr fileHandle,
+            IntPtr existingCompletionPort,
+            IntPtr completionKey,
+            uint numberOfConcurrentThreads);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetQueuedCompletionStatus(
+            SafeIoCompletionPortHandle completionPort,
+            out uint numberOfBytes,
+            out IntPtr completionKey,
+            out IntPtr overlapped,
+            uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool PostQueuedCompletionStatus(
+            SafeIoCompletionPortHandle completionPort,
+            uint numberOfBytes,
+            IntPtr completionKey,
+            IntPtr overlapped);
+
+        [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool CloseHandle(IntPtr obj);
     }

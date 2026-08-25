@@ -6,8 +6,6 @@
 namespace RestrictedProcess
 {
     using System;
-    using System.Collections.Generic;
-    using System.Diagnostics;
     using System.IO;
     using System.Text;
     using System.Threading;
@@ -18,156 +16,367 @@ namespace RestrictedProcess
 
     using RestrictedProcess.Process;
 
-    public class RestrictedProcessExecutor : IExecutor
+    /// <summary>
+    /// Runs a program inside the sandbox and enforces its limits.
+    /// <para>
+    /// Limits are enforced in two tiers. The job object gets a loosened backstop
+    /// (<see cref="RestrictedProcessOptions.JobLimitsMultiplier"/> times the requested memory) so the OS
+    /// stops a runaway program without ever letting it take the machine down, while the exact limits are
+    /// applied as job <em>notification</em> limits: the program is allowed to cross them, which is what
+    /// keeps the overage measurable, and the job reports the breach immediately so the run can be stopped
+    /// without waiting out the clock.
+    /// </para>
+    /// </summary>
+    public sealed class RestrictedProcessExecutor : IExecutor
     {
+        private const int ReadBufferSize = 8192;
+
         private readonly ILogger logger;
         private readonly RestrictedProcessOptions options;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="RestrictedProcessExecutor"/> class with the default
+        /// sandbox options.
+        /// </summary>
+        /// <param name="logger">An optional logger for diagnostics.</param>
         public RestrictedProcessExecutor(ILogger? logger = null)
             : this(new RestrictedProcessOptions(), logger)
         {
         }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="RestrictedProcessExecutor"/> class.
+        /// </summary>
+        /// <param name="options">The sandbox configuration.</param>
+        /// <param name="logger">An optional logger for diagnostics.</param>
         public RestrictedProcessExecutor(RestrictedProcessOptions options, ILogger? logger = null)
         {
             this.options = options ?? throw new ArgumentNullException(nameof(options));
             this.logger = logger ?? NullLogger.Instance;
         }
 
-        // TODO: double check and maybe change order of parameters
-        public ProcessExecutionResult Execute(string fileName, string inputData, int timeLimit, int memoryLimit, IEnumerable<string>? executionArguments = null)
+        private enum WaitResult
         {
-            var result = new ProcessExecutionResult { Type = ProcessExecutionResultType.Success };
-            var workingDirectory = this.options.WorkingDirectory ?? new FileInfo(fileName).DirectoryName;
-            var outputLimitReached = false;
+            Exited = 0,
+            TimedOut = -1,
+            Cancelled = -2,
+        }
 
-            using (var restrictedProcess = new RestrictedProcess(fileName, workingDirectory, executionArguments, Math.Max(4096, (inputData.Length * 2) + 4), this.options.Encoding, this.options))
+        /// <inheritdoc/>
+        public ProcessExecutionResult Execute(ExecutionRequest request)
+        {
+            // Safe to block on: every await below is configured off the captured context.
+            return this.ExecuteAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+        }
+
+        /// <inheritdoc/>
+        public async Task<ProcessExecutionResult> ExecuteAsync(ExecutionRequest request, CancellationToken cancellationToken = default)
+        {
+            if (request == null)
             {
-                // Write to standard input using another thread
-                restrictedProcess.StandardInput.WriteLineAsync(inputData).ContinueWith(
-                    delegate
-                    {
-                        // ReSharper disable once AccessToDisposedClosure
-                        if (!restrictedProcess.IsDisposed)
-                        {
-                            // ReSharper disable once AccessToDisposedClosure
-                            restrictedProcess.StandardInput.FlushAsync().ContinueWith(
-                                delegate
-                                {
-                                    restrictedProcess.StandardInput.Close();
-                                });
-                        }
-                    });
-
-                // Read standard output using another thread to prevent process locking (waiting us to empty the output buffer).
-                // Reading is bounded so a program that floods its output cannot exhaust the host's memory.
-                var processOutputTask = ReadBoundedAsync(restrictedProcess.StandardOutput, this.options.MaxOutputSize)
-                    .ContinueWith(
-                        x =>
-                        {
-                            result.ReceivedOutput = x.Result.Text;
-                            if (x.Result.Truncated)
-                            {
-                                Volatile.Write(ref outputLimitReached, true);
-                                restrictedProcess.Kill();
-                            }
-                        });
-
-                // Read standard error using another thread
-                var errorOutputTask = ReadBoundedAsync(restrictedProcess.StandardError, this.options.MaxErrorSize)
-                    .ContinueWith(
-                        x =>
-                        {
-                            result.ErrorOutput = x.Result.Text;
-                            if (x.Result.Truncated)
-                            {
-                                Volatile.Write(ref outputLimitReached, true);
-                                restrictedProcess.Kill();
-                            }
-                        });
-
-                // Read memory consumption every few milliseconds to determine the peak memory usage of the process
-                const int TimeIntervalBetweenTwoMemoryConsumptionRequests = 45;
-                var memoryTaskCancellationToken = new CancellationTokenSource();
-                var memoryTask = Task.Run(
-                    () =>
-                    {
-                        while (true)
-                        {
-                            // ReSharper disable once AccessToDisposedClosure
-                            var peakWorkingSetSize = restrictedProcess.PeakWorkingSetSize;
-
-                            result.MemoryUsed = Math.Max(result.MemoryUsed, peakWorkingSetSize);
-
-                            if (memoryTaskCancellationToken.IsCancellationRequested)
-                            {
-                                return;
-                            }
-
-                            Thread.Sleep(TimeIntervalBetweenTwoMemoryConsumptionRequests);
-                        }
-                    },
-                    memoryTaskCancellationToken.Token);
-
-                // Start the process
-                restrictedProcess.Start(timeLimit, memoryLimit);
-
-                // Wait the process to complete. Kill it after (timeLimit * WallClockWaitMultiplier) milliseconds if not completed.
-                // We are waiting the process for more than defined time and after this we compare the process time with the real time limit.
-                var exited = restrictedProcess.WaitForExit((int)(timeLimit * Math.Max(1.0, this.options.WallClockWaitMultiplier)));
-                if (!exited)
-                {
-                    restrictedProcess.Kill();
-                    result.Type = ProcessExecutionResultType.TimeLimit;
-                }
-
-                // Close the memory consumption check thread
-                memoryTaskCancellationToken.Cancel();
-                try
-                {
-                    // To be sure that memory consumption will be evaluated correctly
-                    memoryTask.Wait(TimeIntervalBetweenTwoMemoryConsumptionRequests);
-                }
-                catch (AggregateException ex)
-                {
-                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
-                }
-
-                // Close the task that gets the process error output
-                try
-                {
-                    errorOutputTask.Wait(100);
-                }
-                catch (AggregateException ex)
-                {
-                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
-                }
-
-                // Close the task that gets the process output
-                try
-                {
-                    processOutputTask.Wait(100);
-                }
-                catch (AggregateException ex)
-                {
-                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
-                }
-
-                Debug.Assert(restrictedProcess.HasExited, "Restricted process didn't exit!");
-
-                // The job object keeps track of the peak memory committed by the process even after it has
-                // exited, so use it in addition to the sampled working set (short-lived processes can consume
-                // and release memory between two samples).
-                result.MemoryUsed = Math.Max(result.MemoryUsed, restrictedProcess.PeakJobMemoryUsed);
-
-                // Report exit code and total process working time
-                result.ExitCode = restrictedProcess.ExitCode;
-                result.TimeWorked = restrictedProcess.ExitTime - restrictedProcess.StartTime;
-                result.PrivilegedProcessorTime = restrictedProcess.PrivilegedProcessorTime;
-                result.UserProcessorTime = restrictedProcess.UserProcessorTime;
+                throw new ArgumentNullException(nameof(request));
             }
 
-            if (result.TotalProcessorTime.TotalMilliseconds > timeLimit)
+            var result = new ProcessExecutionResult();
+            var startInfo = this.BuildStartInfo(request);
+            var wallClockLimit = this.ResolveWallClockLimit(request);
+
+            var outputTruncated = false;
+            var errorTruncated = false;
+            var cancelled = false;
+            var deadlineReached = false;
+            var diskWriteExceeded = false;
+
+            using (var process = new RestrictedProcess(startInfo, this.options))
+            {
+                var inputTask = WriteInputAsync(process, request.Input);
+                var outputTask = ReadBoundedAsync(
+                    process.StandardOutput, this.options.MaxOutputSize, () => process.Kill());
+                var errorTask = ReadBoundedAsync(
+                    process.StandardError, this.options.MaxErrorSize, () => process.Kill());
+
+                process.Start();
+
+                // Wait for whichever comes first: the process exiting, the job reporting that a limit was
+                // crossed, the wall-clock deadline, or the caller cancelling.
+                var signalled = await WaitAnyAsync(
+                    new[] { process.ExitedHandle, process.NotificationLimitReached },
+                    wallClockLimit,
+                    cancellationToken).ConfigureAwait(false);
+
+                switch (signalled)
+                {
+                    case (int)WaitResult.Cancelled:
+                        cancelled = true;
+                        process.Kill();
+                        break;
+
+                    case (int)WaitResult.TimedOut:
+                        deadlineReached = true;
+                        process.Kill();
+                        break;
+
+                    case 1:
+                        // A soft limit was crossed. Which one is worked out from the measured figures
+                        // below, except for the disk write limit, which leaves no trace in them - ask the
+                        // job before killing the process.
+                        diskWriteExceeded = process.DiskWriteLimitExceeded;
+                        process.Kill();
+                        break;
+                }
+
+                // The peak working set is only observable while the process is alive, so take a reading as
+                // close to the end as possible. Committed memory comes from the job and survives the exit.
+                process.SampleWorkingSet();
+
+                if (signalled != (int)WaitResult.Exited)
+                {
+                    await WaitAnyAsync(new[] { process.ExitedHandle }, this.options.OutputDrainTimeout, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+
+                // Every write handle for the pipes is gone once the process is, so the readers reach end of
+                // file on their own. The timeout is a safety net, not the normal path - unlike the fixed
+                // 100 ms wait this used to use, which quietly dropped large outputs.
+                await this.DrainAsync(inputTask, outputTask, errorTask).ConfigureAwait(false);
+
+                var output = ResultOf(outputTask);
+                var error = ResultOf(errorTask);
+                result.ReceivedOutput = output.Text;
+                result.ErrorOutput = error.Text;
+                outputTruncated = output.Truncated;
+                errorTruncated = error.Truncated;
+
+                result.ExitCode = process.ExitCode;
+                result.TimeWorked = process.WallClockTime;
+                result.UserProcessorTime = process.UserProcessorTime;
+                result.PrivilegedProcessorTime = process.PrivilegedProcessorTime;
+                result.PeakCommitBytes = process.PeakCommitBytes;
+                result.PeakWorkingSetBytes = process.PeakWorkingSetBytes;
+                result.IoStatistics = process.IoStatistics;
+            }
+
+            result.OutputTruncated = outputTruncated;
+            result.ErrorTruncated = errorTruncated;
+            result.MemoryUsed = this.SelectMemoryMetric(result);
+
+            this.Classify(request, result, deadlineReached, cancelled, diskWriteExceeded);
+            return result;
+        }
+
+        private static (string Text, bool Truncated) ResultOf(Task<(string Text, bool Truncated)> task)
+        {
+            return task.Status == TaskStatus.RanToCompletion ? task.Result : (string.Empty, false);
+        }
+
+        /// <summary>
+        /// Reads a stream up to a cap. Once the cap is reached the reader stops storing but keeps draining
+        /// to end of file, so a program that is still writing never blocks on a full pipe while it is being
+        /// killed.
+        /// </summary>
+        private static async Task<(string Text, bool Truncated)> ReadBoundedAsync(
+            StreamReader reader, long maxCharacters, Action onTruncated)
+        {
+            var builder = new StringBuilder();
+            var buffer = new char[ReadBufferSize];
+            var truncated = false;
+
+            try
+            {
+                int read;
+                while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+                {
+                    if (truncated)
+                    {
+                        continue;
+                    }
+
+                    if (maxCharacters > 0 && builder.Length + read > maxCharacters)
+                    {
+                        builder.Append(buffer, 0, (int)(maxCharacters - builder.Length));
+                        truncated = true;
+                        onTruncated();
+                        continue;
+                    }
+
+                    builder.Append(buffer, 0, read);
+                }
+            }
+            catch (IOException)
+            {
+                // The pipe was torn down under us by a kill; whatever was read so far still counts.
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            return (builder.ToString(), truncated);
+        }
+
+        private static async Task WriteInputAsync(RestrictedProcess process, string input)
+        {
+            try
+            {
+                await process.StandardInput.WriteLineAsync(input ?? string.Empty).ConfigureAwait(false);
+                await process.StandardInput.FlushAsync().ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                // A program is free to ignore its standard input and exit; the write then fails, which is
+                // not an error of the run.
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            finally
+            {
+                try
+                {
+                    // Closing the write end is what lets a program that reads to end of input finish.
+                    process.StandardInput.Close();
+                }
+                catch (IOException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        /// <summary>
+        /// Waits for the first of several kernel objects to be signalled without blocking a thread, using
+        /// the thread pool's wait infrastructure rather than a dedicated waiter.
+        /// </summary>
+        /// <returns>
+        /// The index of the handle that was signalled, <see cref="WaitResult.TimedOut"/> or
+        /// <see cref="WaitResult.Cancelled"/>.
+        /// </returns>
+        private static Task<int> WaitAnyAsync(WaitHandle[] handles, TimeSpan? timeout, CancellationToken cancellationToken)
+        {
+            var completion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var registrations = new RegisteredWaitHandle[handles.Length];
+            var cancellationRegistration = default(CancellationTokenRegistration);
+            var settled = 0;
+
+            void Complete(int outcome)
+            {
+                if (Interlocked.Exchange(ref settled, 1) == 0)
+                {
+                    completion.TrySetResult(outcome);
+                }
+            }
+
+            for (var i = 0; i < handles.Length; i++)
+            {
+                var index = i;
+                registrations[i] = ThreadPool.RegisterWaitForSingleObject(
+                    handles[i],
+                    (_, timedOut) => Complete(timedOut ? (int)WaitResult.TimedOut : index),
+                    null,
+                    timeout ?? Timeout.InfiniteTimeSpan,
+                    true);
+            }
+
+            if (cancellationToken.CanBeCanceled)
+            {
+                cancellationRegistration = cancellationToken.Register(() => Complete((int)WaitResult.Cancelled));
+            }
+
+            return completion.Task.ContinueWith(
+                task =>
+                {
+                    foreach (var registration in registrations)
+                    {
+                        registration?.Unregister(null);
+                    }
+
+                    cancellationRegistration.Dispose();
+                    return task.Result;
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        private RestrictedProcessStartInfo BuildStartInfo(ExecutionRequest request)
+        {
+            var workingDirectory = request.WorkingDirectory
+                                   ?? this.options.WorkingDirectory
+                                   ?? Path.GetDirectoryName(Path.GetFullPath(request.FileName));
+
+            return new RestrictedProcessStartInfo(request.FileName)
+            {
+                Arguments = request.Arguments,
+                WorkingDirectory = workingDirectory,
+                MemoryLimitBytes = request.MemoryLimitBytes,
+                CpuTimeLimit = request.CpuTimeLimit,
+                Encoding = this.options.Encoding,
+            };
+        }
+
+        private TimeSpan? ResolveWallClockLimit(ExecutionRequest request)
+        {
+            if (request.WallClockLimit.HasValue)
+            {
+                return request.WallClockLimit;
+            }
+
+            if (!request.CpuTimeLimit.HasValue)
+            {
+                return null;
+            }
+
+            var multiplier = Math.Max(1.0, this.options.WallClockWaitMultiplier);
+            return TimeSpan.FromMilliseconds(request.CpuTimeLimit.Value.TotalMilliseconds * multiplier);
+        }
+
+        private async Task DrainAsync(Task inputTask, Task outputTask, Task errorTask)
+        {
+            var readers = Task.WhenAll(outputTask, errorTask, inputTask);
+            var finished = await Task.WhenAny(readers, Task.Delay(this.options.OutputDrainTimeout)).ConfigureAwait(false);
+
+            if (finished != readers)
+            {
+                this.logger.LogWarning(
+                    "The standard IO of the sandboxed process did not reach end of file within {Timeout}; the captured output may be incomplete.",
+                    this.options.OutputDrainTimeout);
+            }
+        }
+
+        private long SelectMemoryMetric(ProcessExecutionResult result)
+        {
+            switch (this.options.MemoryMetric)
+            {
+                case MemoryMetric.PeakWorkingSet:
+                    return result.PeakWorkingSetBytes;
+                case MemoryMetric.Max:
+                    return Math.Max(result.PeakCommitBytes, result.PeakWorkingSetBytes);
+                default:
+                    return result.PeakCommitBytes;
+            }
+        }
+
+        /// <summary>
+        /// Decides the verdict. The order matters and is deliberately the same as previous versions:
+        /// a time limit outranks everything, a memory limit outranks a runtime error, and flooding output
+        /// outranks both success and a runtime error.
+        /// </summary>
+        private void Classify(
+            ExecutionRequest request,
+            ProcessExecutionResult result,
+            bool deadlineReached,
+            bool cancelled,
+            bool diskWriteExceeded)
+        {
+            if (cancelled)
+            {
+                result.Type = ProcessExecutionResultType.Cancelled;
+                return;
+            }
+
+            if (deadlineReached
+                || (request.CpuTimeLimit.HasValue && result.TotalProcessorTime > request.CpuTimeLimit.Value))
             {
                 result.Type = ProcessExecutionResultType.TimeLimit;
             }
@@ -177,12 +386,11 @@ namespace RestrictedProcess
                 result.Type = ProcessExecutionResultType.RunTimeError;
             }
 
-            if (result.MemoryUsed > memoryLimit)
+            if (request.MemoryLimitBytes.HasValue && result.MemoryUsed > request.MemoryLimitBytes.Value)
             {
                 result.Type = ProcessExecutionResultType.MemoryLimit;
             }
 
-            // A non-zero exit code with no other limit tripped and no error output is still a failed run.
             if (this.options.TreatNonZeroExitCodeAsRunTimeError
                 && result.ExitCode != 0
                 && result.Type == ProcessExecutionResultType.Success)
@@ -190,39 +398,19 @@ namespace RestrictedProcess
                 result.Type = ProcessExecutionResultType.RunTimeError;
             }
 
-            // Output flooding takes precedence over a runtime error from the (truncated) error output.
-            if (outputLimitReached
+            // OutputLimit covers a program that produced too much, whether down a pipe or onto disk. The
+            // disk side is checked twice: the job's notification fires while the program is still running
+            // and stops it early where the OS supports it, and the accumulated counter is compared
+            // afterwards so the verdict is right even where the notification never arrives.
+            var wroteTooMuch = diskWriteExceeded
+                               || (this.options.MaxDiskWriteBytes.HasValue
+                                   && result.IoStatistics.WriteBytes > (ulong)this.options.MaxDiskWriteBytes.Value);
+
+            if ((result.OutputTruncated || result.ErrorTruncated || wroteTooMuch)
                 && (result.Type == ProcessExecutionResultType.Success || result.Type == ProcessExecutionResultType.RunTimeError))
             {
                 result.Type = ProcessExecutionResultType.OutputLimit;
             }
-
-            return result;
-        }
-
-        private static async Task<(string Text, bool Truncated)> ReadBoundedAsync(StreamReader reader, long maxCharacters)
-        {
-            if (maxCharacters <= 0)
-            {
-                return (await reader.ReadToEndAsync().ConfigureAwait(false), false);
-            }
-
-            var builder = new StringBuilder();
-            var buffer = new char[4096];
-            int read;
-            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
-            {
-                var remaining = maxCharacters - builder.Length;
-                if (read >= remaining)
-                {
-                    builder.Append(buffer, 0, (int)remaining);
-                    return (builder.ToString(), true);
-                }
-
-                builder.Append(buffer, 0, read);
-            }
-
-            return (builder.ToString(), false);
         }
     }
 }

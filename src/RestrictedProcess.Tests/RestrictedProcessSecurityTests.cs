@@ -25,7 +25,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldNotBeAbleToCreateFiles.exe", CreateFileSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 1000, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1000, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
@@ -50,7 +50,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldNotBeAbleToReadClipboard.exe", ReadClipboardSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
@@ -71,7 +71,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldNotBeAbleToWriteToClipboard.exe", WriteToClipboardSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
@@ -100,7 +100,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldNotBeAbleToStartProcess.exe", StartCmdProcessSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
@@ -135,7 +135,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldRunWithRestrictedToken.exe", PrintIsTokenRestrictedSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
@@ -178,7 +178,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldHaveNoPrivileges.exe", PrintPrivilegeCountSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
@@ -232,7 +232,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldRunAtLowIntegrityLevel.exe", PrintIntegrityLevelSourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
@@ -274,13 +274,13 @@ class Program
                 // With the handle whitelist the event handle is not inherited, so the child cannot
                 // signal it: the strict-handle-checks mitigation turns the bad reference into a crash,
                 // but either way the event stays unsignaled.
-                var result = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024, arguments);
+                var result = new RestrictedProcessExecutor().Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024, arguments));
                 Assert.NotEqual("True", result.ReceivedOutput.Trim());
                 Assert.NotEqual(WaitObject0, NativeMethods.WaitForSingleObject(eventHandle, 0));
 
                 // Control run: without the handle whitelist the leaked handle is inherited and usable
                 var permissiveOptions = new RestrictedProcessOptions { RestrictInheritedHandles = false };
-                var permissiveResult = new RestrictedProcessExecutor(permissiveOptions).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024, arguments);
+                var permissiveResult = new RestrictedProcessExecutor(permissiveOptions).Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024, arguments));
                 Assert.Equal("True", permissiveResult.ReceivedOutput.Trim());
                 Assert.Equal(WaitObject0, NativeMethods.WaitForSingleObject(eventHandle, 0));
             }
@@ -316,7 +316,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldHaveChildProcessCreationBlockedByPolicy.exe", PrintChildProcessPolicySourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
@@ -349,7 +349,7 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldApplyDefaultProcessMitigations.exe", PrintExtensionPointPolicySourceCode);
 
             var process = new RestrictedProcessExecutor();
-            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
@@ -379,7 +379,7 @@ class Program
                 Mitigations = ProcessMitigations.Default | ProcessMitigations.Win32kSystemCallDisable,
             };
             var process = new RestrictedProcessExecutor(options);
-            var result = process.Execute(exePath, string.Empty, 1000, 32 * 1024 * 1024);
+            var result = process.Execute(UntimedRequest(exePath, string.Empty, 1000, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.DoesNotContain("SHOWED", result.ReceivedOutput);
@@ -417,13 +417,13 @@ class Program
 }";
             var exePath = this.CreateExe("RestrictedProcessShouldRunOnAlternateDesktop.exe", PrintDesktopNameSourceCode);
 
-            var result = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = new RestrictedProcessExecutor().Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
             Assert.StartsWith("rp_", result.ReceivedOutput.Trim());
 
             // Control: without the alternate desktop the child runs on the host's desktop
             var options = new RestrictedProcessOptions { UseAlternateDesktop = false };
-            var hostResult = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var hostResult = new RestrictedProcessExecutor(options).Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
             Assert.Equal(ProcessExecutionResultType.Success, hostResult.Type);
             Assert.DoesNotContain("rp_", hostResult.ReceivedOutput);
         }
@@ -444,13 +444,13 @@ class Program
             Environment.SetEnvironmentVariable("RP_TEST_SECRET", "super-secret-value");
             try
             {
-                var result = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+                var result = new RestrictedProcessExecutor().Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
                 Assert.Equal(ProcessExecutionResultType.Success, result.Type);
                 Assert.Equal("<null>", result.ReceivedOutput.Trim());
 
                 // Control: with scrubbing off the child inherits the full parent environment
                 var options = new RestrictedProcessOptions { ScrubEnvironment = false };
-                var inheritedResult = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+                var inheritedResult = new RestrictedProcessExecutor(options).Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
                 Assert.Equal("super-secret-value", inheritedResult.ReceivedOutput.Trim());
             }
             finally
@@ -475,7 +475,7 @@ class Program
             var options = new RestrictedProcessOptions();
             options.AdditionalEnvironmentVariables["RP_EXTRA"] = "hello-sandbox";
 
-            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            var result = new RestrictedProcessExecutor(options).Execute(UntimedRequest(exePath, string.Empty, 1500, 32 * 1024 * 1024));
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
             Assert.Equal("hello-sandbox", result.ReceivedOutput.Trim());
         }
@@ -513,13 +513,15 @@ class Program
 
             // Control: the default sandbox allows outbound connections. If the host itself has no
             // egress there is nothing to prove blocking against, so skip rather than fail.
-            var baseline = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 6000, 64 * 1024 * 1024);
+            var baseline = new RestrictedProcessExecutor().Execute(UntimedRequest(exePath, string.Empty, 6000, 64 * 1024 * 1024));
             Assert.Contains("START", baseline.ReceivedOutput);
             Assert.SkipUnless(baseline.ReceivedOutput.Contains("CONNECTED"), "The host has no outbound network access to test against.");
 
             // With network access blocked the AppContainer child still runs but cannot connect out.
-            var options = new RestrictedProcessOptions { BlockNetworkAccess = true };
-            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 6000, 64 * 1024 * 1024);
+            // The throwaway desktop has to be turned off: an AppContainer process cannot attach to a
+            // desktop the sandbox creates, and the two options refuse to be combined for that reason.
+            var options = new RestrictedProcessOptions { BlockNetworkAccess = true, UseAlternateDesktop = false };
+            var result = new RestrictedProcessExecutor(options).Execute(UntimedRequest(exePath, string.Empty, 6000, 64 * 1024 * 1024));
             Assert.Contains("START", result.ReceivedOutput); // the child actually ran inside the AppContainer
             Assert.DoesNotContain("CONNECTED", result.ReceivedOutput);
         }
@@ -535,7 +537,7 @@ class Program
         private static class NativeMethods
         {
             [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-            public static extern IntPtr CreateEvent(ref NativeSecurityAttributes eventAttributes, bool manualReset, bool initialState, string name);
+            public static extern IntPtr CreateEvent(ref NativeSecurityAttributes eventAttributes, bool manualReset, bool initialState, string? name);
 
             [DllImport("kernel32.dll", SetLastError = true)]
             [return: MarshalAs(UnmanagedType.Bool)]
