@@ -2,6 +2,7 @@
 {
     using System;
     using System.Diagnostics;
+    using System.Text;
 
     using Xunit;
 
@@ -72,6 +73,11 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldWorkWithCyrillic.exe", ReadInputAndThenOutputSourceCode);
 
             const string InputData = "Николай\n";
+            Assert.SkipUnless(
+                AnsiCodePageCanRepresent(InputData),
+                "The system ANSI code page cannot represent this text, so the child writes question marks "
+                + "before the sandbox sees the bytes. Pin RestrictedProcessOptions.Encoding instead.");
+
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));
 
@@ -94,6 +100,11 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldOutputProperLengthForCyrillicText.exe", ReadInputAndThenOutputTheLengthSourceCode);
 
             const string InputData = "Николай\n";
+            Assert.SkipUnless(
+                AnsiCodePageCanRepresent(InputData),
+                "The system ANSI code page cannot represent this text, so the child writes question marks "
+                + "before the sandbox sees the bytes. Pin RestrictedProcessOptions.Encoding instead.");
+
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));
 
@@ -116,11 +127,51 @@ class Program
             var exePath = this.CreateExe("RestrictedProcessShouldReceiveCyrillicText.exe", ReadInputAndThenCheckTheTextToContainCyrillicLettersSourceCode);
 
             const string InputData = "абвгдежзийклмнопрстуфхцчшщъьюя\n";
+            Assert.SkipUnless(
+                AnsiCodePageCanRepresent(InputData),
+                "The system ANSI code page cannot represent this text, so the child writes question marks "
+                + "before the sandbox sees the bytes. Pin RestrictedProcessOptions.Encoding instead.");
+
             var process = new RestrictedProcessExecutor();
             var result = process.Execute(UntimedRequest(exePath, InputData, 2000, 32 * 1024 * 1024));
 
             Assert.NotNull(result);
             Assert.Equal("True", result.ReceivedOutput.Trim());
+        }
+
+        [Fact]
+        public void PinningTheEncodingCarriesTextTheAnsiCodePageCannotRepresent()
+        {
+            // The default is the system ANSI code page, because that is what a console child writes to a
+            // redirected handle - but it cannot carry text outside its own repertoire, and the loss happens
+            // inside the child. Pinning both sides to UTF-8 is the way to move arbitrary text, and this has
+            // to hold on any host regardless of its locale.
+            const string EchoUtf8SourceCode = @"using System;
+using System.IO;
+using System.Text;
+class Program
+{
+    public static void Main()
+    {
+        var utf8 = new UTF8Encoding(false);
+        var input = new StreamReader(Console.OpenStandardInput(), utf8);
+        var output = new StreamWriter(Console.OpenStandardOutput(), utf8);
+        output.AutoFlush = true;
+        var line = input.ReadLine();
+        output.WriteLine(line + ""|"" + line.Length);
+    }
+}";
+            var exePath = this.CreateExe("PinnedUtf8Encoding.exe", EchoUtf8SourceCode);
+            const string InputData = "Николай ✓ 日本語";
+
+            // UTF8Encoding(false), not Encoding.UTF8: the latter carries a byte order mark preamble, which
+            // the writer would push into the child as the first bytes of its standard input.
+            var options = new RestrictedProcessOptions { Encoding = new UTF8Encoding(false) };
+            var result = new RestrictedProcessExecutor(options)
+                .Execute(UntimedRequest(exePath, InputData, 5000, 32 * 1024 * 1024));
+
+            Assert.Equal(ProcessExecutionResultType.Success, result.Type);
+            Assert.Equal(InputData + "|" + InputData.Length, result.ReceivedOutput.Trim());
         }
 
         [Fact]

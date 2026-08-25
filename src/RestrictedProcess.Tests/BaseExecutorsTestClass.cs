@@ -3,6 +3,8 @@
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Runtime.InteropServices;
+    using System.Text;
 
     using Microsoft.CodeAnalysis;
     using Microsoft.CodeAnalysis.CSharp;
@@ -59,6 +61,20 @@
             return request;
         }
 
+        /// <summary>
+        /// Whether the system ANSI code page can represent the given text. The sandbox reads and writes
+        /// redirected standard IO in that code page by default, because that is what a console child
+        /// writes; on a machine whose code page is 1252 a Cyrillic string cannot survive the round trip in
+        /// either direction, and the child emits question marks before the sandbox ever sees the bytes.
+        /// Tests that depend on the host locale check this rather than assuming it.
+        /// </summary>
+        public static bool AnsiCodePageCanRepresent(string text)
+        {
+            var codePage = (int)NativeMethods.GetACP();
+            var encoding = CodePagesEncodingProvider.Instance.GetEncoding(codePage) ?? Encoding.GetEncoding(codePage);
+            return encoding.GetString(encoding.GetBytes(text)) == text;
+        }
+
         public string CreateExe(string exeName, string sourceString)
         {
             Directory.CreateDirectory(this.exeDirectory);
@@ -87,6 +103,12 @@
 
             Assert.True(emitResult.Success, "Code compilation contains errors!");
             return outputExePath;
+        }
+
+        private static class NativeMethods
+        {
+            [DllImport("kernel32.dll")]
+            internal static extern uint GetACP();
         }
     }
 }

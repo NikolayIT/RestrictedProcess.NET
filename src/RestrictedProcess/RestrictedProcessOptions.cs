@@ -194,7 +194,18 @@ namespace RestrictedProcess
 
         /// <summary>
         /// Gets or sets the encoding used for the process standard IO. Null uses the system's active ANSI
-        /// code page, which is what console child processes write by default.
+        /// code page, which is what a console child writes to a redirected handle by default.
+        /// <para>
+        /// That default cannot carry text outside the code page's repertoire - on a machine running code
+        /// page 1252, Cyrillic comes back as question marks, and the loss happens inside the child before
+        /// the sandbox sees any bytes. To move arbitrary text, pin this to UTF-8 <em>and</em> have the
+        /// program use UTF-8 for its own standard IO.
+        /// </para>
+        /// <para>
+        /// Use <c>new UTF8Encoding(false)</c> rather than <see cref="System.Text.Encoding.UTF8"/>: the
+        /// latter carries a byte order mark preamble, which the writer would push into the child as the
+        /// first bytes of its standard input.
+        /// </para>
         /// </summary>
         public Encoding? Encoding { get; set; }
 
