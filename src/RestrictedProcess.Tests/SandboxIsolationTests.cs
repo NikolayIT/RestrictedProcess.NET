@@ -1,7 +1,11 @@
 ﻿namespace RestrictedProcess.Tests
 {
     using System;
+    using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
+    using System.Security.AccessControl;
+    using System.Security.Principal;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -405,6 +409,31 @@ class Program
         }
 
         [Fact]
+        public void BlockingNetworkAccessLeavesNoPermanentGrantOnTheExecutable()
+        {
+            // Version 2 granted ALL APPLICATION PACKAGES read and execute on the executable through icacls
+            // and never took it back, so every program it ever ran was left with a widened ACL. The grant
+            // is now made to the container's own package SID and removed when the run ends.
+            const string HelloSourceCode = @"using System;
+class Program
+{
+    public static void Main()
+    {
+        Console.WriteLine(""ok"");
+    }
+}";
+            var exePath = this.CreateExe("AppContainerAclRevert.exe", HelloSourceCode);
+
+            var before = DescribeAcl(exePath);
+
+            var options = new RestrictedProcessOptions { BlockNetworkAccess = true, UseAlternateDesktop = false };
+            new RestrictedProcessExecutor(options)
+                .Execute(UntimedRequest(exePath, string.Empty, 10000, 64 * 1024 * 1024));
+
+            Assert.Equal(before, DescribeAcl(exePath));
+        }
+
+        [Fact]
         public void CapabilitiesProbeReportsTheHost()
         {
             var capabilities = SandboxCapabilities.Probe();
@@ -439,6 +468,17 @@ class Program
             }
 
             return result.ToArray();
+        }
+
+        private static List<string> DescribeAcl(string path)
+        {
+            var security = new FileInfo(path).GetAccessControl();
+            return security
+                .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>()
+                .Select(rule => rule.IdentityReference.Value + ":" + rule.FileSystemRights + ":" + rule.AccessControlType)
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToList();
         }
     }
 }

@@ -73,6 +73,15 @@ namespace RestrictedProcess.JobObjects
             return this.QueryInformation<BasicAndIoAccountingInformation>(InfoClass.BasicAndIoAccountingInformation);
         }
 
+        /// <summary>
+        /// Reads the notification limits back. Mostly useful as a check that the structure marshals the way
+        /// the kernel expects: if the layout were wrong, what comes back would not be what went in.
+        /// </summary>
+        public NotificationLimitInformation GetNotificationLimits()
+        {
+            return this.QueryInformation<NotificationLimitInformation>(InfoClass.NotificationLimitInformation);
+        }
+
         public LimitViolationInformation GetLimitViolationInformation()
         {
             return this.QueryInformation<LimitViolationInformation>(InfoClass.LimitViolationInformation);

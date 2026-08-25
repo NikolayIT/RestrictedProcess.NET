@@ -2,12 +2,16 @@
 {
     using System;
     using System.Runtime.InteropServices;
+    using System.Threading;
     using System.Windows.Forms;
 
     using Xunit;
 
     public class RestrictedProcessSecurityTests : BaseExecutorsTestClass
     {
+        private const string ClipboardBusyReason =
+            "Another process is holding the clipboard, so it cannot be seeded for this test.";
+
         private const uint WaitObject0 = 0;
 
         [Fact]
@@ -46,7 +50,7 @@ class Program
         }
     }
 }";
-            Clipboard.SetText("clipboard test");
+            Assert.SkipUnless(TrySetClipboardText("clipboard test"), ClipboardBusyReason);
             var exePath = this.CreateExe("RestrictedProcessShouldNotBeAbleToReadClipboard.exe", ReadClipboardSourceCode);
 
             var process = new RestrictedProcessExecutor();
@@ -75,7 +79,7 @@ class Program
 
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.RunTimeError, "No exception is thrown!");
-            Assert.NotEqual("i did it", Clipboard.GetText());
+            Assert.NotEqual("i did it", ReadClipboardText());
         }
 
         [Fact]
@@ -524,6 +528,46 @@ class Program
             var result = new RestrictedProcessExecutor(options).Execute(UntimedRequest(exePath, string.Empty, 6000, 64 * 1024 * 1024));
             Assert.Contains("START", result.ReceivedOutput); // the child actually ran inside the AppContainer
             Assert.DoesNotContain("CONNECTED", result.ReceivedOutput);
+        }
+
+        /// <summary>
+        /// The clipboard belongs to the whole desktop, and any process can hold it open for a moment, which
+        /// makes SetText fail with CLIPBRD_E_CANT_OPEN. Seeding it is only setup for these tests, so it is
+        /// retried and the test skips rather than failing when the machine will not co-operate.
+        /// </summary>
+        private static bool TrySetClipboardText(string text)
+        {
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                try
+                {
+                    Clipboard.SetText(text);
+                    return true;
+                }
+                catch (System.Runtime.InteropServices.ExternalException)
+                {
+                    Thread.Sleep(100);
+                }
+            }
+
+            return false;
+        }
+
+        private static string ReadClipboardText()
+        {
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                try
+                {
+                    return Clipboard.GetText();
+                }
+                catch (System.Runtime.InteropServices.ExternalException)
+                {
+                    Thread.Sleep(100);
+                }
+            }
+
+            return string.Empty;
         }
 
         [StructLayout(LayoutKind.Sequential)]
