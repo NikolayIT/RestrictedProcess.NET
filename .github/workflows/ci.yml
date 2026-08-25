@@ -23,9 +23,16 @@ jobs:
       - name: Build
         run: dotnet build src/RestrictedProcess.sln --configuration Release
 
-      # Tests are intentionally not run here: they start real processes in the sandbox
-      # (CreateProcessAsUser with a restricted token), which fails with "Access is denied"
-      # on hosted CI runners. Run `dotnet test` locally on Windows instead.
+      # The tests start real processes in the sandbox. They used to be skipped here because every one of
+      # them failed with "Access is denied": the process was created with CREATE_BREAKAWAY_FROM_JOB, which
+      # fails outright when the caller is already inside a job object that does not permit breakaway - as
+      # it is under a CI runner, and under `dotnet test` generally. Nested jobs have been supported since
+      # Windows 8, so the flag is gone and the job is now attached at creation instead.
+      #
+      # The suite runs serially by design (see xunit.runner.json): it measures processor time and memory,
+      # which parallel execution makes meaningless.
+      - name: Test
+        run: dotnet test --solution src/RestrictedProcess.sln --configuration Release
 
       - name: Upload NuGet package artifact
         uses: actions/upload-artifact@v4
