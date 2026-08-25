@@ -448,9 +448,10 @@ class Program
                 Assert.Equal(ProcessExecutionResultType.Success, result.Type);
                 Assert.Equal("<null>", result.ReceivedOutput.Trim());
 
-                // Control: the legacy options inherit the full parent environment
-                var legacyResult = new RestrictedProcessExecutor(RestrictedProcessOptions.Legacy).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
-                Assert.Equal("super-secret-value", legacyResult.ReceivedOutput.Trim());
+                // Control: with scrubbing off the child inherits the full parent environment
+                var options = new RestrictedProcessOptions { ScrubEnvironment = false };
+                var inheritedResult = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+                Assert.Equal("super-secret-value", inheritedResult.ReceivedOutput.Trim());
             }
             finally
             {

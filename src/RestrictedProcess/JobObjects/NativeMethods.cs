@@ -24,6 +24,9 @@ namespace RestrictedProcess.JobObjects
         internal static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
 
         [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern bool QueryInformationJobObject(
             IntPtr job,
             InfoClass jobObjectInformationClass,

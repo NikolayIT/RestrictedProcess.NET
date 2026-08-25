@@ -43,6 +43,24 @@ namespace RestrictedProcess.JobObjects
             }
         }
 
+        public void SetCpuRateControlInformation(CpuRateControlInformation cpuRateControlInformation)
+        {
+            var length = Marshal.SizeOf(typeof(CpuRateControlInformation));
+            var pointer = Marshal.AllocHGlobal(length);
+            try
+            {
+                Marshal.StructureToPtr(cpuRateControlInformation, pointer, false);
+                if (!NativeMethods.SetInformationJobObject(this.handle, InfoClass.CpuRateControlInformation, pointer, (uint)length))
+                {
+                    throw new Win32Exception();
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
+
         public void SetBasicUiRestrictions(BasicUiRestrictions uiRestrictions)
         {
             var length = Marshal.SizeOf(typeof(BasicUiRestrictions));
@@ -108,6 +126,11 @@ namespace RestrictedProcess.JobObjects
         public bool AddProcess(IntPtr processHandle)
         {
             return NativeMethods.AssignProcessToJobObject(this.handle, processHandle);
+        }
+
+        public bool Terminate(uint exitCode)
+        {
+            return this.handle != IntPtr.Zero && NativeMethods.TerminateJobObject(this.handle, exitCode);
         }
 
         public void Dispose()

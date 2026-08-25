@@ -9,22 +9,33 @@ namespace RestrictedProcess.JobObjects
 
     internal static class PrepareJobObject
     {
-        public static ExtendedLimitInformation GetExtendedLimitInformation(int maximumTime, int maximumMemory)
+        public static ExtendedLimitInformation GetExtendedLimitInformation(RestrictedProcessOptions options, int maximumMemory)
         {
+            // Only the job-wide memory limit is used (not JOB_OBJECT_LIMIT_PROCESS_MEMORY): with the
+            // 2x backstop the job limit lets a program allocate past the requested limit so the
+            // executor can measure the overage and classify it as a memory-limit result. A per-process
+            // commit limit instead fails the allocation atomically, leaving committed memory unchanged
+            // and unmeasurable, which would misclassify an over-limit program as a runtime error.
+            var limitFlags = LimitFlags.JOB_OBJECT_LIMIT_JOB_MEMORY
+                             //// The following two flags are causing the process to have unexpected behavior
+                             //// | LimitFlags.JOB_OBJECT_LIMIT_JOB_TIME
+                             //// | LimitFlags.JOB_OBJECT_LIMIT_PROCESS_TIME
+                             | LimitFlags.JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                             | LimitFlags.JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION
+                             | LimitFlags.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
             var info = new BasicLimitInformation
             {
-                LimitFlags =
-                    (int)(LimitFlags.JOB_OBJECT_LIMIT_JOB_MEMORY
-                     //// The following two flags are causing the process to have unexpected behavior
-                     //// | LimitFlags.JOB_OBJECT_LIMIT_JOB_TIME
-                     //// | LimitFlags.JOB_OBJECT_LIMIT_PROCESS_TIME
-                     | LimitFlags.JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-                     | LimitFlags.JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION
-                     | LimitFlags.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE),
-                PerJobUserTimeLimit = maximumTime, // TODO: Remove or rework
-                PerProcessUserTimeLimit = maximumTime,
-                ActiveProcessLimit = 1,
+                ActiveProcessLimit = Math.Max(1, options.ActiveProcessLimit),
             };
+
+            if (options.ProcessorAffinityMask.HasValue)
+            {
+                limitFlags |= LimitFlags.JOB_OBJECT_LIMIT_AFFINITY;
+                info.Affinity = options.ProcessorAffinityMask.Value;
+            }
+
+            info.LimitFlags = (uint)limitFlags;
 
             var extendedInfo = new ExtendedLimitInformation
             {

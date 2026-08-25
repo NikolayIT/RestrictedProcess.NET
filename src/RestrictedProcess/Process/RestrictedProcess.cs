@@ -56,7 +56,7 @@ namespace RestrictedProcess.Process
                 CreateProcessFlags.CREATE_NEW_PROCESS_GROUP |
                 CreateProcessFlags.DETACHED_PROCESS | // http://stackoverflow.com/questions/6371149/what-is-the-difference-between-detach-process-and-create-no-window-process-creat
                 CreateProcessFlags.CREATE_NO_WINDOW) |
-                (uint)ProcessPriorityClass.High;
+                (uint)this.options.PriorityClass;
 
             string commandLine;
             if (arguments != null)
@@ -257,9 +257,23 @@ namespace RestrictedProcess.Process
         {
             try
             {
+                var multiplier = Math.Max(1.0, this.options.JobLimitsMultiplier);
+                var jobMemoryLimit = (int)Math.Min(int.MaxValue, memoryLimit * multiplier);
+
                 this.jobObject = new JobObject();
-                this.jobObject.SetExtendedLimitInformation(PrepareJobObject.GetExtendedLimitInformation(timeLimit * 2, memoryLimit * 2));
+                this.jobObject.SetExtendedLimitInformation(PrepareJobObject.GetExtendedLimitInformation(this.options, jobMemoryLimit));
                 this.jobObject.SetBasicUiRestrictions(PrepareJobObject.GetUiRestrictions());
+
+                if (this.options.CpuRateLimitPercent.HasValue)
+                {
+                    var percent = Math.Min(100, Math.Max(1, this.options.CpuRateLimitPercent.Value));
+                    this.jobObject.SetCpuRateControlInformation(new CpuRateControlInformation
+                    {
+                        ControlFlags = CpuRateControlInformation.FlagEnable | CpuRateControlInformation.FlagHardCap,
+                        CpuRate = (uint)(percent * 100),
+                    });
+                }
+
                 if (!this.jobObject.AddProcess(this.processInformation.Process))
                 {
                     throw new Win32Exception();
@@ -276,6 +290,9 @@ namespace RestrictedProcess.Process
 
         public void Kill()
         {
+            // Terminate the whole job so anything that slipped in dies too, then make sure
+            // the main process is gone even if it was never assigned to a job.
+            this.jobObject?.Terminate(unchecked((uint)-1));
             NativeMethods.TerminateProcess(this.safeProcessHandle, -1);
         }
 

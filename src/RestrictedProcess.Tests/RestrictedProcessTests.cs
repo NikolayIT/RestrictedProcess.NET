@@ -1,6 +1,7 @@
 ﻿namespace RestrictedProcess.Tests
 {
     using System;
+    using System.Diagnostics;
 
     using Xunit;
 
@@ -190,6 +191,89 @@ class Program
 
             Assert.NotNull(result);
             Assert.True(result.Type == ProcessExecutionResultType.MemoryLimit);
+        }
+
+        [Fact]
+        public void RestrictedProcessShouldRunWithConfiguredPriorityClass()
+        {
+            const string PrintPriorityClassSourceCode = @"using System;
+using System.Diagnostics;
+class Program
+{
+    public static void Main()
+    {
+        Console.WriteLine(Process.GetCurrentProcess().PriorityClass);
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldRunWithConfiguredPriorityClass.exe", PrintPriorityClassSourceCode);
+
+            var defaultResult = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 2000, 32 * 1024 * 1024);
+            Assert.Equal(ProcessExecutionResultType.Success, defaultResult.Type);
+            Assert.Equal("High", defaultResult.ReceivedOutput.Trim());
+
+            var options = new RestrictedProcessOptions { PriorityClass = ProcessPriorityClass.Normal };
+            var normalResult = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 2000, 32 * 1024 * 1024);
+            Assert.Equal(ProcessExecutionResultType.Success, normalResult.Type);
+            Assert.Equal("Normal", normalResult.ReceivedOutput.Trim());
+        }
+
+        [Fact]
+        public void RestrictedProcessShouldRespectProcessorAffinity()
+        {
+            const string PrintAffinitySourceCode = @"using System;
+using System.Diagnostics;
+class Program
+{
+    public static void Main()
+    {
+        Console.WriteLine(Process.GetCurrentProcess().ProcessorAffinity.ToInt64());
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldRespectProcessorAffinity.exe", PrintAffinitySourceCode);
+
+            var options = new RestrictedProcessOptions { ProcessorAffinityMask = (UIntPtr)0x1 };
+            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 2000, 32 * 1024 * 1024);
+
+            Assert.Equal(ProcessExecutionResultType.Success, result.Type);
+            Assert.Equal("1", result.ReceivedOutput.Trim());
+        }
+
+        [Fact]
+        public void RestrictedProcessShouldRespectCpuRateLimit()
+        {
+            const string BusyLoopSourceCode = @"using System;
+using System.Diagnostics;
+class Program
+{
+    public static void Main()
+    {
+        var stopwatch = Stopwatch.StartNew();
+        long counter = 0;
+        while (stopwatch.ElapsedMilliseconds < 500)
+        {
+            counter++;
+        }
+        Console.WriteLine(counter);
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldRespectCpuRateLimit.exe", BusyLoopSourceCode);
+
+            // The CPU rate is a percentage of the whole machine's capacity, so to throttle a single
+            // thread the cap must be below one core's share (100 / ProcessorCount). Cap the job to
+            // roughly half a core regardless of the core count.
+            var percent = Math.Max(1, 50 / Environment.ProcessorCount);
+
+            var uncapped = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 3000, 32 * 1024 * 1024);
+            Assert.Equal(ProcessExecutionResultType.Success, uncapped.Type);
+
+            var options = new RestrictedProcessOptions { CpuRateLimitPercent = percent };
+            var capped = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 3000, 32 * 1024 * 1024);
+            Assert.Equal(ProcessExecutionResultType.Success, capped.Type);
+
+            // For the same busy loop the throttled run must burn far less CPU time than the uncapped one.
+            Assert.True(
+                capped.TotalProcessorTime.TotalMilliseconds < 0.7 * uncapped.TotalProcessorTime.TotalMilliseconds,
+                $"Capped CPU time {capped.TotalProcessorTime.TotalMilliseconds} ms was not throttled below the uncapped {uncapped.TotalProcessorTime.TotalMilliseconds} ms.");
         }
     }
 }
