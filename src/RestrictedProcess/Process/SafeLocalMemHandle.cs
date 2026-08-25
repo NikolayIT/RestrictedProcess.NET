@@ -6,13 +6,9 @@
 namespace RestrictedProcess.Process
 {
     using System;
-    using System.Security;
-    using System.Security.Permissions;
 
     using Microsoft.Win32.SafeHandles;
 
-    [SuppressUnmanagedCodeSecurity]
-    [HostProtection(SecurityAction.LinkDemand, MayLeakOnAbort = true)]
     internal sealed class SafeLocalMemHandle : SafeHandleZeroOrMinusOneIsInvalid
     {
         internal SafeLocalMemHandle()
@@ -20,7 +16,6 @@ namespace RestrictedProcess.Process
         {
         }
 
-        [SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
         internal SafeLocalMemHandle(IntPtr existingHandle, bool ownsHandle)
             : base(ownsHandle)
         {

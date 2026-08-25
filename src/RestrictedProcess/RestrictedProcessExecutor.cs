@@ -21,13 +21,13 @@ namespace RestrictedProcess
     {
         private readonly ILogger logger;
 
-        public RestrictedProcessExecutor(ILogger logger = null)
+        public RestrictedProcessExecutor(ILogger? logger = null)
         {
             this.logger = logger ?? NullLogger.Instance;
         }
 
         // TODO: double check and maybe change order of parameters
-        public ProcessExecutionResult Execute(string fileName, string inputData, int timeLimit, int memoryLimit, IEnumerable<string> executionArguments = null)
+        public ProcessExecutionResult Execute(string fileName, string inputData, int timeLimit, int memoryLimit, IEnumerable<string>? executionArguments = null)
         {
             var result = new ProcessExecutionResult { Type = ProcessExecutionResultType.Success };
             var workingDirectory = new FileInfo(fileName).DirectoryName;

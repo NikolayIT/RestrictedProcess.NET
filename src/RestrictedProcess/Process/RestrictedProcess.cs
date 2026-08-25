@@ -11,7 +11,6 @@ namespace RestrictedProcess.Process
     using System.Diagnostics;
     using System.IO;
     using System.Runtime.InteropServices;
-    using System.Runtime.Versioning;
     using System.Text;
 
     using global::RestrictedProcess.JobObjects;
@@ -23,10 +22,10 @@ namespace RestrictedProcess.Process
         private readonly SafeProcessHandle safeProcessHandle;
         private readonly string fileName = string.Empty;
         private ProcessInformation processInformation;
-        private JobObject jobObject;
+        private JobObject? jobObject;
         private int exitCode;
 
-        public RestrictedProcess(string fileName, string workingDirectory, IEnumerable<string> arguments = null, int bufferSize = 4096)
+        public RestrictedProcess(string fileName, string? workingDirectory, IEnumerable<string>? arguments = null, int bufferSize = 4096)
         {
             // Initialize fields
             this.fileName = fileName;
@@ -98,11 +97,11 @@ namespace RestrictedProcess.Process
             NativeMethods.CloseHandle(restrictedToken);
         }
 
-        public StreamWriter StandardInput { get; private set; }
+        public StreamWriter StandardInput { get; private set; } = null!;
 
-        public StreamReader StandardOutput { get; private set; }
+        public StreamReader StandardOutput { get; private set; } = null!;
 
-        public StreamReader StandardError { get; private set; }
+        public StreamReader StandardError { get; private set; } = null!;
 
         public int Id => this.processInformation.ProcessId;
 
@@ -132,7 +131,7 @@ namespace RestrictedProcess.Process
             {
                 if (!this.HasExited)
                 {
-                    throw new Exception("Process is still active!");
+                    throw new InvalidOperationException("Process is still active!");
                 }
 
                 return this.exitCode;
@@ -224,8 +223,6 @@ namespace RestrictedProcess.Process
             }
         }
 
-        [ResourceExposure(ResourceScope.Machine)]
-        [ResourceConsumption(ResourceScope.Machine)]
         public void Kill()
         {
             NativeMethods.TerminateProcess(this.safeProcessHandle, -1);
@@ -249,7 +246,7 @@ namespace RestrictedProcess.Process
                 this.IsDisposed = true;
                 this.safeProcessHandle.Dispose();
                 NativeMethods.CloseHandle(this.processInformation.Thread);
-                this.jobObject.Dispose();
+                this.jobObject?.Dispose();
 
                 // Disposing these object causes "System.InvalidOperationException: The stream is currently in use by a previous operation on the stream."
                 // this.StandardInput.Dispose();
@@ -307,13 +304,11 @@ namespace RestrictedProcess.Process
         // methods such as WriteLine as well as native CRT functions like printf) which are making an
         // assumption that the console standard handles (obtained via GetStdHandle()) are opened
         // for synchronous I/O and hence they can work fine with ReadFile/WriteFile synchronously!
-        [ResourceExposure(ResourceScope.None)]
-        [ResourceConsumption(ResourceScope.Machine, ResourceScope.Machine)]
         private void CreatePipe(out SafeFileHandle parentHandle, out SafeFileHandle childHandle, bool parentInputs, int bufferSize)
         {
             var securityAttributesParent = new SecurityAttributes { InheritHandle = true };
 
-            SafeFileHandle tempHandle = null;
+            SafeFileHandle? tempHandle = null;
             try
             {
                 if (parentInputs)

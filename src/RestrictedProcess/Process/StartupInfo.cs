@@ -16,7 +16,7 @@ namespace RestrictedProcess.Process
     /// </summary>
     [SuppressMessage("StyleCop.CSharp.MaintainabilityRules", "SA1401:FieldsMustBePrivate", Justification = "Reviewed. Suppression is OK here.")]
     [StructLayout(LayoutKind.Sequential)]
-    internal class StartupInfo
+    internal class StartupInfo : IDisposable
     {
         public int SizeInBytes;
 
@@ -52,11 +52,11 @@ namespace RestrictedProcess.Process
 
         public IntPtr Reserved2Pointer = IntPtr.Zero;
 
-        public SafeFileHandle StandardInputHandle = new SafeFileHandle(IntPtr.Zero, false);
+        public SafeFileHandle? StandardInputHandle = new SafeFileHandle(IntPtr.Zero, false);
 
-        public SafeFileHandle StandardOutputHandle = new SafeFileHandle(IntPtr.Zero, false);
+        public SafeFileHandle? StandardOutputHandle = new SafeFileHandle(IntPtr.Zero, false);
 
-        public SafeFileHandle StandardErrorHandle = new SafeFileHandle(IntPtr.Zero, false);
+        public SafeFileHandle? StandardErrorHandle = new SafeFileHandle(IntPtr.Zero, false);
 
         public StartupInfo()
         {

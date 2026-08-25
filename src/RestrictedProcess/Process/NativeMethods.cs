@@ -7,9 +7,7 @@ namespace RestrictedProcess.Process
 {
     using System;
     using System.Diagnostics.CodeAnalysis;
-    using System.Runtime.ConstrainedExecution;
     using System.Runtime.InteropServices;
-    using System.Runtime.Versioning;
 
     using Microsoft.Win32.SafeHandles;
 
@@ -68,18 +66,16 @@ namespace RestrictedProcess.Process
             new SidIdentifierAuthority(new byte[] { 0, 0, 0, 0, 0, 16 });
 
         [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        [System.Security.SuppressUnmanagedCodeSecurityAttribute]
-        [ResourceExposure(ResourceScope.Machine)]
         internal static extern bool CreateProcessAsUser(
             IntPtr hToken,
-            string lpApplicationName,
+            string? lpApplicationName,
             string lpCommandLine,
             SecurityAttributes lpProcessAttributes,
             SecurityAttributes lpThreadAttributes,
             bool bInheritHandles,
             uint dwCreationFlags,
             IntPtr lpEnvironment,
-            string lpCurrentDirectory,
+            string? lpCurrentDirectory,
             StartupInfo lpStartupInfo,
             out ProcessInformation lpProcessInformation);
 
@@ -87,7 +83,6 @@ namespace RestrictedProcess.Process
         internal static extern uint ResumeThread(IntPtr hThread);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [ResourceExposure(ResourceScope.Process)]
         internal static extern bool CreatePipe(
             out SafeFileHandle hReadPipe,
             out SafeFileHandle hWritePipe,
@@ -101,7 +96,6 @@ namespace RestrictedProcess.Process
         internal static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true, BestFitMapping = false)]
-        [ResourceExposure(ResourceScope.Machine)]
         internal static extern bool DuplicateHandle(
             HandleRef hSourceProcessHandle,
             SafeHandle hSourceHandle,
@@ -112,7 +106,6 @@ namespace RestrictedProcess.Process
             int dwOptions);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true, BestFitMapping = false)]
-        [ResourceExposure(ResourceScope.Machine)]
         internal static extern bool DuplicateHandle(
             HandleRef hSourceProcessHandle,
             SafeHandle hSourceHandle,
@@ -134,15 +127,12 @@ namespace RestrictedProcess.Process
             uint dwOptions);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [ResourceExposure(ResourceScope.Machine)]
         internal static extern bool TerminateProcess(SafeProcessHandle processHandle, int exitCode);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [ResourceExposure(ResourceScope.None)]
         internal static extern bool GetExitCodeProcess(SafeProcessHandle processHandle, out int exitCode);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [ResourceExposure(ResourceScope.None)]
         internal static extern bool GetProcessTimes(
             SafeProcessHandle handle,
             out long creation,
@@ -165,11 +155,11 @@ namespace RestrictedProcess.Process
             IntPtr existingTokenHandle,
             CreateRestrictedTokenFlags createRestrictedTokenFlags,
             int disableSidCount,
-            SidAndAttributes[] sidsToDisable,
+            SidAndAttributes[]? sidsToDisable,
             int deletePrivilegeCount,
-            LuidAndAttributes[] privilegesToDelete,
+            LuidAndAttributes[]? privilegesToDelete,
             int restrictedSidCount,
-            SidAndAttributes[] sidsToRestrict,
+            SidAndAttributes[]? sidsToRestrict,
             out IntPtr newTokenHandle);
 
         [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -241,11 +231,9 @@ namespace RestrictedProcess.Process
             out IntPtr pSid);
 
         [DllImport("ntdll.dll", CharSet = CharSet.Auto)]
-        [ResourceExposure(ResourceScope.None)]
         internal static extern int NtQuerySystemInformation(int query, IntPtr dataPtr, int size, out int returnedSize);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [ResourceExposure(ResourceScope.Machine)]
         internal static extern SafeProcessHandle OpenProcess(int access, bool inherit, int processId);
 
         [DllImport("psapi.dll", EntryPoint = "GetProcessMemoryInfo")]
@@ -262,8 +250,6 @@ namespace RestrictedProcess.Process
         internal static extern bool SaferComputeTokenFromLevel(IntPtr LevelHandle, IntPtr InAccessToken, out IntPtr OutAccessToken, int dwFlags, IntPtr lpReserved);
 
         [DllImport("kernel32.dll", ExactSpelling = true, CharSet = CharSet.Auto, SetLastError = true)]
-        [ReliabilityContract(Consistency.WillNotCorruptState, Cer.Success)]
-        [ResourceExposure(ResourceScope.None)]
         internal static extern bool CloseHandle(IntPtr handle);
 
         [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -273,7 +259,6 @@ namespace RestrictedProcess.Process
         [DllImport("advapi32.dll", CharSet = CharSet.Auto, SetLastError = true, BestFitMapping = false)]
         internal static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string stringSecurityDescriptor, int stringSDRevision, out SafeLocalMemHandle securityDescriptor, IntPtr securityDescriptorSize);
 
-        [ReliabilityContract(Consistency.WillNotCorruptState, Cer.Success)]
         [DllImport("kernel32.dll")]
         internal static extern IntPtr LocalFree(IntPtr memoryHandler);
     }

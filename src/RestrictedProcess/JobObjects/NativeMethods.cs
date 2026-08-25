@@ -11,7 +11,7 @@ namespace RestrictedProcess.JobObjects
     internal static class NativeMethods
     {
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        internal static extern IntPtr CreateJobObject([In]ref SecurityAttributes jobAttributes, string name);
+        internal static extern IntPtr CreateJobObject([In]ref SecurityAttributes jobAttributes, string? name);
 
         [DllImport("kernel32.dll")]
         internal static extern bool SetInformationJobObject(

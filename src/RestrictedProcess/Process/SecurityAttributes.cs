@@ -11,12 +11,17 @@ namespace RestrictedProcess.Process
 
     [SuppressMessage("StyleCop.CSharp.MaintainabilityRules", "SA1401:FieldsMustBePrivate", Justification = "Reviewed. Suppression is OK here.")]
     [StructLayout(LayoutKind.Sequential)]
-    internal class SecurityAttributes
+    internal class SecurityAttributes : IDisposable
     {
         public int Length = 12;
 
         public SafeLocalMemHandle SecurityDescriptor = new SafeLocalMemHandle(IntPtr.Zero, false);
 
         public bool InheritHandle = false;
+
+        public void Dispose()
+        {
+            this.SecurityDescriptor.Dispose();
+        }
     }
 }

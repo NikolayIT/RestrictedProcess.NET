@@ -6,15 +6,12 @@
 namespace RestrictedProcess.Process
 {
     using System.Runtime.InteropServices;
-    using System.Runtime.Versioning;
     using System.Threading;
 
     using Microsoft.Win32.SafeHandles;
 
     internal class ProcessWaitHandle : WaitHandle
     {
-        [ResourceExposure(ResourceScope.None)]
-        [ResourceConsumption(ResourceScope.Machine, ResourceScope.Machine)]
         internal ProcessWaitHandle(SafeProcessHandle processHandle)
         {
             SafeWaitHandle waitHandle;
