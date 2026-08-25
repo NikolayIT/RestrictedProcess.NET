@@ -99,6 +99,11 @@ it terminates the job and loses the measurement; the same threshold is a notific
   tested against every desktop security descriptor available — any DACL (including `GENERIC_ALL` to
   Everyone), any mandatory label (Low, Untrusted, none), on the current window station and on a private
   one — and the child always died with `ERROR_DLL_INIT_FAILED`. Only the inherited desktop works.
+- **What the default level can actually read was measured, not assumed.** It reaches whatever grants
+  `BUILTIN\Users` or `Everyone`: the system directories, and anything off a drive root, which inherits
+  `Users:(RX)` from `C:\`. It does not reach the user profile, which blocks inheritance and grants only
+  SYSTEM, Administrators and the user - none of them restricting SIDs. Do not describe this as "can read
+  anything the user can read": true of the group, but it gives the wrong picture.
 - **The per-run SID protects objects that take the token default DACL, and nothing else.** A named object
   created under `Local\` lands in the session BaseNamedObjects directory and inherits that directory's
   ACEs instead, so a second run *can* open it - this was measured, so do not claim otherwise in the docs.

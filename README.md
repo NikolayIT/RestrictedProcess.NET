@@ -85,11 +85,17 @@ at creation time, on a throwaway desktop. Concretely, it:
 This section matters as much as the one above.
 
 - **Reads.** At the default token level the restricting SIDs include `Everyone` and `BUILTIN\Users`, and a
-  low integrity level only blocks *writes*. A sandboxed program can therefore read anything on the machine
-  that ordinary users can read. The token levels that genuinely contain reads
-  (`StrictlyRestricted`, `Lockdown`) also deny access to the runtime the program needs to load, so a
-  managed executable never reaches its entry point under them — they are for statically linked native
-  binaries. `WriteRestricted` is the practical middle ground when you need a writable scratch directory.
+  low integrity level only blocks *writes*, so a sandboxed program can read anything whose ACL grants those
+  groups. Concretely, that is the system directories and **anything created off a drive root**, which
+  inherits `BUILTIN\Users:(RX)` from it - `C:\Data`, `C:\inetpub`, a judge's own working folder.
+  It is **not** the user profile: `C:\Users\<name>` blocks inheritance and grants only SYSTEM,
+  Administrators and the user, none of which are restricting SIDs, so Documents, Desktop, AppData and
+  `%TEMP%` are refused. There is a test covering both halves of that.
+  If you keep test data or expected output somewhere the sandbox can reach, take `Users` and `Everyone` off
+  its ACL - that is the fix, not a stricter token level. The levels that contain all reads
+  (`StrictlyRestricted`, `Lockdown`) also deny the runtime the program needs to load, so a managed
+  executable never reaches its entry point under them; they are for statically linked native binaries.
+  `WriteRestricted` is the practical middle ground when you need a writable scratch directory.
 - **Named objects in the session namespace.** The per-run SID protects objects that take the token's
   *default* DACL. An object created under `Local\` lands in the session's `BaseNamedObjects` directory and
   picks up that directory's inheritable ACEs instead, so one sandboxed run can still open a named event or

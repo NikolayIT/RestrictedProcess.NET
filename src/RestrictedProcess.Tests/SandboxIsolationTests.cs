@@ -18,6 +18,9 @@
     /// </summary>
     public class SandboxIsolationTests : BaseExecutorsTestClass
     {
+        private const string ProfileIsSharedReason =
+            "This profile grants BUILTIN Users or Everyone, so there is no containment left to assert.";
+
         private const string ReadFileSourceCode = @"using System;
 using System.IO;
 class Program
@@ -73,6 +76,38 @@ class Program
 
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
             Assert.StartsWith("READ:", result.ReceivedOutput.Trim());
+        }
+
+        [Fact]
+        public void TheUserProfileIsOutOfReachEvenAtTheDefaultTokenLevel()
+        {
+            // "Reads are not contained" is true but easy to read as worse than it is. What the sandbox can
+            // reach is whatever grants BUILTIN\Users or Everyone: system directories, and folders created
+            // off a drive root, which inherit Users:(RX) from it. The user profile is not one of those - it
+            // blocks inheritance and grants only SYSTEM, Administrators and the user itself, none of which
+            // are restricting SIDs, so the second access check finds nothing to match and refuses.
+            var probe = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                "rp_profile_probe_" + Guid.NewGuid().ToString("N") + ".txt");
+
+            File.WriteAllText(probe, "expected answers for the test cases");
+
+            try
+            {
+                Assert.SkipUnless(!GrantsUsersOrEveryone(probe), ProfileIsSharedReason);
+
+                var exePath = this.CreateExe("ProfileReadProbe.exe", ReadFileSourceCode);
+
+                var result = new RestrictedProcessExecutor()
+                    .Execute(UntimedRequest(exePath, string.Empty, 10000, 64 * 1024 * 1024, new[] { probe }));
+
+                Assert.Equal(ProcessExecutionResultType.Success, result.Type);
+                Assert.StartsWith("DENIED:", result.ReceivedOutput.Trim(), StringComparison.Ordinal);
+            }
+            finally
+            {
+                File.Delete(probe);
+            }
         }
 
         [Theory]
@@ -479,6 +514,18 @@ class Program
                 .Select(rule => rule.IdentityReference.Value + ":" + rule.FileSystemRights + ":" + rule.AccessControlType)
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToList();
+        }
+
+        private static bool GrantsUsersOrEveryone(string path)
+        {
+            var rules = new FileInfo(path)
+                .GetAccessControl()
+                .GetAccessRules(true, true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>();
+
+            return rules.Any(rule =>
+                rule.AccessControlType == AccessControlType.Allow
+                && (rule.IdentityReference.Value == "S-1-5-32-545" || rule.IdentityReference.Value == "S-1-1-0"));
         }
     }
 }
