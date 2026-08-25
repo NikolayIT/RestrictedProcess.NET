@@ -9,6 +9,7 @@ namespace RestrictedProcess
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -37,9 +38,10 @@ namespace RestrictedProcess
         public ProcessExecutionResult Execute(string fileName, string inputData, int timeLimit, int memoryLimit, IEnumerable<string>? executionArguments = null)
         {
             var result = new ProcessExecutionResult { Type = ProcessExecutionResultType.Success };
-            var workingDirectory = new FileInfo(fileName).DirectoryName;
+            var workingDirectory = this.options.WorkingDirectory ?? new FileInfo(fileName).DirectoryName;
+            var outputLimitReached = false;
 
-            using (var restrictedProcess = new RestrictedProcess(fileName, workingDirectory, executionArguments, Math.Max(4096, (inputData.Length * 2) + 4), options: this.options))
+            using (var restrictedProcess = new RestrictedProcess(fileName, workingDirectory, executionArguments, Math.Max(4096, (inputData.Length * 2) + 4), this.options.Encoding, this.options))
             {
                 // Write to standard input using another thread
                 restrictedProcess.StandardInput.WriteLineAsync(inputData).ContinueWith(
@@ -57,19 +59,32 @@ namespace RestrictedProcess
                         }
                     });
 
-                // Read standard output using another thread to prevent process locking (waiting us to empty the output buffer)
-                var processOutputTask = restrictedProcess.StandardOutput.ReadToEndAsync().ContinueWith(
-                    x =>
-                    {
-                        result.ReceivedOutput = x.Result;
-                    });
+                // Read standard output using another thread to prevent process locking (waiting us to empty the output buffer).
+                // Reading is bounded so a program that floods its output cannot exhaust the host's memory.
+                var processOutputTask = ReadBoundedAsync(restrictedProcess.StandardOutput, this.options.MaxOutputSize)
+                    .ContinueWith(
+                        x =>
+                        {
+                            result.ReceivedOutput = x.Result.Text;
+                            if (x.Result.Truncated)
+                            {
+                                Volatile.Write(ref outputLimitReached, true);
+                                restrictedProcess.Kill();
+                            }
+                        });
 
                 // Read standard error using another thread
-                var errorOutputTask = restrictedProcess.StandardError.ReadToEndAsync().ContinueWith(
-                    x =>
-                    {
-                        result.ErrorOutput = x.Result;
-                    });
+                var errorOutputTask = ReadBoundedAsync(restrictedProcess.StandardError, this.options.MaxErrorSize)
+                    .ContinueWith(
+                        x =>
+                        {
+                            result.ErrorOutput = x.Result.Text;
+                            if (x.Result.Truncated)
+                            {
+                                Volatile.Write(ref outputLimitReached, true);
+                                restrictedProcess.Kill();
+                            }
+                        });
 
                 // Read memory consumption every few milliseconds to determine the peak memory usage of the process
                 const int TimeIntervalBetweenTwoMemoryConsumptionRequests = 45;
@@ -97,9 +112,9 @@ namespace RestrictedProcess
                 // Start the process
                 restrictedProcess.Start(timeLimit, memoryLimit);
 
-                // Wait the process to complete. Kill it after (timeLimit * 1.5) milliseconds if not completed.
+                // Wait the process to complete. Kill it after (timeLimit * WallClockWaitMultiplier) milliseconds if not completed.
                 // We are waiting the process for more than defined time and after this we compare the process time with the real time limit.
-                var exited = restrictedProcess.WaitForExit((int)(timeLimit * 1.5));
+                var exited = restrictedProcess.WaitForExit((int)(timeLimit * Math.Max(1.0, this.options.WallClockWaitMultiplier)));
                 if (!exited)
                 {
                     restrictedProcess.Kill();
@@ -167,7 +182,47 @@ namespace RestrictedProcess
                 result.Type = ProcessExecutionResultType.MemoryLimit;
             }
 
+            // A non-zero exit code with no other limit tripped and no error output is still a failed run.
+            if (this.options.TreatNonZeroExitCodeAsRunTimeError
+                && result.ExitCode != 0
+                && result.Type == ProcessExecutionResultType.Success)
+            {
+                result.Type = ProcessExecutionResultType.RunTimeError;
+            }
+
+            // Output flooding takes precedence over a runtime error from the (truncated) error output.
+            if (outputLimitReached
+                && (result.Type == ProcessExecutionResultType.Success || result.Type == ProcessExecutionResultType.RunTimeError))
+            {
+                result.Type = ProcessExecutionResultType.OutputLimit;
+            }
+
             return result;
+        }
+
+        private static async Task<(string Text, bool Truncated)> ReadBoundedAsync(StreamReader reader, long maxCharacters)
+        {
+            if (maxCharacters <= 0)
+            {
+                return (await reader.ReadToEndAsync().ConfigureAwait(false), false);
+            }
+
+            var builder = new StringBuilder();
+            var buffer = new char[4096];
+            int read;
+            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+            {
+                var remaining = maxCharacters - builder.Length;
+                if (read >= remaining)
+                {
+                    builder.Append(buffer, 0, (int)remaining);
+                    return (builder.ToString(), true);
+                }
+
+                builder.Append(buffer, 0, read);
+            }
+
+            return (builder.ToString(), false);
         }
     }
 }

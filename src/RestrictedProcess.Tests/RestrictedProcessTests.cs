@@ -194,6 +194,55 @@ class Program
         }
 
         [Fact]
+        public void RestrictedProcessShouldStopAFloodingProcess()
+        {
+            const string FloodingSourceCode = @"using System;
+class Program
+{
+    public static void Main()
+    {
+        var line = new string('a', 1000);
+        while (true)
+        {
+            Console.WriteLine(line);
+        }
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldStopAFloodingProcess.exe", FloodingSourceCode);
+
+            const long MaxOutputSize = 1024 * 1024;
+            var options = new RestrictedProcessOptions { MaxOutputSize = MaxOutputSize };
+            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 5000, 32 * 1024 * 1024);
+
+            Assert.NotNull(result);
+            Assert.Equal(ProcessExecutionResultType.OutputLimit, result.Type);
+            Assert.True(result.ReceivedOutput.Length <= MaxOutputSize, $"Output was not bounded: {result.ReceivedOutput.Length} characters.");
+
+            // The flood was cut short well before the time limit, not left to run out the clock.
+            Assert.True(result.TimeWorked.TotalMilliseconds < 5000, $"The process ran for {result.TimeWorked.TotalMilliseconds} ms.");
+        }
+
+        [Fact]
+        public void RestrictedProcessShouldReportNonZeroExitCodeAsRunTimeError()
+        {
+            const string ExitWithCodeSourceCode = @"using System;
+class Program
+{
+    public static void Main()
+    {
+        Environment.Exit(1);
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldReportNonZeroExitCodeAsRunTimeError.exe", ExitWithCodeSourceCode);
+
+            var result = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 2000, 32 * 1024 * 1024);
+
+            Assert.NotNull(result);
+            Assert.Equal(ProcessExecutionResultType.RunTimeError, result.Type);
+            Assert.Equal(1, result.ExitCode);
+        }
+
+        [Fact]
         public void RestrictedProcessShouldRunWithConfiguredPriorityClass()
         {
             const string PrintPriorityClassSourceCode = @"using System;

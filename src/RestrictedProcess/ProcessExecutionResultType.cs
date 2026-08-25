@@ -29,5 +29,10 @@ namespace RestrictedProcess
         /// Run time error result.
         /// </summary>
         RunTimeError = 4,
+
+        /// <summary>
+        /// The process produced more output than the configured limit and was stopped.
+        /// </summary>
+        OutputLimit = 8,
     }
 }

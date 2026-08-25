@@ -16,6 +16,7 @@ namespace RestrictedProcess.Process
         public const int SYNCHRONIZE = 0x00100000;
         public const int PROCESS_TERMINATE = 0x0001;
         public const int STILL_ACTIVE = 0x00000103;
+        public const uint WAIT_TIMEOUT = 0x00000102;
 
         public const uint STANDARD_RIGHTS_REQUIRED = 0x000F0000;
         public const uint STANDARD_RIGHTS_READ = 0x00020000;

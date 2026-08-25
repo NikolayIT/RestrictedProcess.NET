@@ -8,6 +8,7 @@ namespace RestrictedProcess
     using System;
     using System.Collections.Generic;
     using System.Diagnostics;
+    using System.Text;
 
     /// <summary>
     /// Configures how strongly a <see cref="Process.RestrictedProcess"/> is sandboxed.
@@ -78,6 +79,41 @@ namespace RestrictedProcess
         /// executor). Must be greater than or equal to 1.
         /// </summary>
         public double JobLimitsMultiplier { get; set; } = 2.0;
+
+        /// <summary>
+        /// Gets or sets the multiplier applied to the requested time limit to derive how long the
+        /// executor waits (wall-clock) before killing the process. Must be greater than or equal to 1.
+        /// </summary>
+        public double WallClockWaitMultiplier { get; set; } = 1.5;
+
+        /// <summary>
+        /// Gets or sets the maximum number of characters read from the standard output before the
+        /// process is stopped and the result is classified as an output limit. Zero means unlimited.
+        /// </summary>
+        public long MaxOutputSize { get; set; } = 64 * 1024 * 1024;
+
+        /// <summary>
+        /// Gets or sets the maximum number of characters read from the standard error before the
+        /// process is stopped and the result is classified as an output limit. Zero means unlimited.
+        /// </summary>
+        public long MaxErrorSize { get; set; } = 16 * 1024 * 1024;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether a non-zero process exit code is reported as a
+        /// runtime error (unless the run already tripped a time, memory or output limit).
+        /// </summary>
+        public bool TreatNonZeroExitCodeAsRunTimeError { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets the encoding used for the process standard IO. Null uses the system's
+        /// active ANSI code page, which is what console child processes write by default.
+        /// </summary>
+        public Encoding? Encoding { get; set; }
+
+        /// <summary>
+        /// Gets or sets the working directory of the process. Null uses the directory of the executable.
+        /// </summary>
+        public string? WorkingDirectory { get; set; }
 
         /// <summary>
         /// Gets or sets a value indicating whether the process receives a minimal environment

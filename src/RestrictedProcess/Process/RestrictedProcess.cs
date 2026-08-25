@@ -237,7 +237,7 @@ namespace RestrictedProcess.Process
             {
                 var counters = default(ProcessMemoryCounters);
                 NativeMethods.GetProcessMemoryInfo(this.Handle, out counters, (uint)Marshal.SizeOf(counters));
-                return (int)counters.PeakWorkingSetSize;
+                return (long)counters.PeakWorkingSetSize;
             }
         }
 
@@ -247,7 +247,7 @@ namespace RestrictedProcess.Process
             {
                 var counters = default(ProcessMemoryCounters);
                 NativeMethods.GetProcessMemoryInfo(this.Handle, out counters, (uint)Marshal.SizeOf(counters));
-                return (int)counters.PeakPagefileUsage;
+                return (long)counters.PeakPagefileUsage;
             }
         }
 
@@ -299,7 +299,7 @@ namespace RestrictedProcess.Process
         public bool WaitForExit(int milliseconds)
         {
             var result = NativeMethods.WaitForSingleObject(this.processInformation.Process, (uint)milliseconds);
-            return result != 258; // TODO: Extract as constant and check all cases (http://msdn.microsoft.com/en-us/library/windows/desktop/ms687032%28v=vs.85%29.aspx)
+            return result != NativeMethods.WAIT_TIMEOUT;
         }
 
         public void Dispose()
