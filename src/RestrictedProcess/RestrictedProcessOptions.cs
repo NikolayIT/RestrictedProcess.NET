@@ -5,6 +5,9 @@
 
 namespace RestrictedProcess
 {
+    using System;
+    using System.Collections.Generic;
+
     /// <summary>
     /// Configures how strongly a <see cref="Process.RestrictedProcess"/> is sandboxed.
     /// The defaults enable all hardening that a plain console executable can tolerate;
@@ -23,6 +26,7 @@ namespace RestrictedProcess
                 DisallowChildProcesses = false,
                 RestrictInheritedHandles = false,
                 Mitigations = ProcessMitigations.None,
+                ScrubEnvironment = false,
             };
 
         /// <summary>
@@ -53,5 +57,20 @@ namespace RestrictedProcess
         /// Gets or sets the process creation mitigation policies applied to the process.
         /// </summary>
         public ProcessMitigations Mitigations { get; set; } = ProcessMitigations.Default;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the process receives a minimal environment
+        /// block (a handful of system variables) instead of inheriting the parent's environment,
+        /// which may hold secrets.
+        /// </summary>
+        public bool ScrubEnvironment { get; set; } = true;
+
+        /// <summary>
+        /// Gets extra environment variables merged into the environment of the sandboxed process.
+        /// When <see cref="ScrubEnvironment"/> is true they are added to the minimal block;
+        /// otherwise they are added to (and override) the inherited environment.
+        /// </summary>
+        public IDictionary<string, string> AdditionalEnvironmentVariables { get; } =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     }
 }

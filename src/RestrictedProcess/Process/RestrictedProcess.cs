@@ -10,6 +10,7 @@ namespace RestrictedProcess.Process
     using System.ComponentModel;
     using System.Diagnostics;
     using System.IO;
+    using System.Linq;
     using System.Runtime.InteropServices;
     using System.Text;
 
@@ -75,6 +76,7 @@ namespace RestrictedProcess.Process
             }
 
             ProcThreadAttributeList? attributeList = null;
+            var environmentBlock = IntPtr.Zero;
             try
             {
                 attributeList = this.CreateProcThreadAttributeList(startupInfo);
@@ -84,6 +86,8 @@ namespace RestrictedProcess.Process
                     creationFlags |= (uint)CreateProcessFlags.EXTENDED_STARTUPINFO_PRESENT;
                 }
 
+                environmentBlock = this.CreateEnvironmentBlock(workingDirectory);
+
                 if (!NativeMethods.CreateProcessAsUser(
                         restrictedToken,
                         null,
@@ -92,7 +96,7 @@ namespace RestrictedProcess.Process
                         threadSecurityAttributes,
                         true, // In order to standard input, output and error redirection work, the handles must be inheritable and the CreateProcess() API must specify that inheritable handles are to be inherited by the child process by specifying TRUE in the bInheritHandles parameter.
                         creationFlags,
-                        IntPtr.Zero,
+                        environmentBlock,
                         workingDirectory,
                         startupInfo,
                         out this.processInformation))
@@ -107,6 +111,11 @@ namespace RestrictedProcess.Process
                 startupInfo.Dispose();
 
                 attributeList?.Dispose();
+                if (environmentBlock != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(environmentBlock);
+                }
+
                 NativeMethods.CloseHandle(restrictedToken);
             }
 
@@ -357,6 +366,27 @@ namespace RestrictedProcess.Process
             return IntPtr.Zero;
         }
 
+        /// <summary>
+        /// Builds a double-null-terminated, case-insensitively sorted Unicode environment block
+        /// for the child process, marshaled to unmanaged memory the caller must free.
+        /// </summary>
+        private static IntPtr BuildEnvironmentBlock(IDictionary<string, string> variables)
+        {
+            var builder = new StringBuilder();
+            foreach (var pair in variables.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                builder.Append(pair.Key).Append('=').Append(pair.Value).Append('\0');
+            }
+
+            builder.Append('\0');
+            return Marshal.StringToHGlobalUni(builder.ToString());
+        }
+
+        private static string GetEnvironmentVariableOrEmpty(string name)
+        {
+            return Environment.GetEnvironmentVariable(name) ?? string.Empty;
+        }
+
         private void RedirectStandardIoHandles(ref StartupInfo startupInfo, int bufferSize, Encoding encoding)
         {
             // Some of this code is based on System.Diagnostics.Process.StartWithCreateProcess method implementation
@@ -450,6 +480,64 @@ namespace RestrictedProcess.Process
                     tempHandle.Close();
                 }
             }
+        }
+
+        /// <summary>
+        /// Builds the environment block passed to the child process, honoring
+        /// <see cref="RestrictedProcessOptions.ScrubEnvironment"/> and
+        /// <see cref="RestrictedProcessOptions.AdditionalEnvironmentVariables"/>.
+        /// Returns <see cref="IntPtr.Zero"/> to inherit the parent's environment unchanged.
+        /// </summary>
+        private IntPtr CreateEnvironmentBlock(string? workingDirectory)
+        {
+            var additional = this.options.AdditionalEnvironmentVariables;
+
+            if (!this.options.ScrubEnvironment)
+            {
+                if (additional.Count == 0)
+                {
+                    // Inherit the parent's environment unchanged (the historical behavior).
+                    return IntPtr.Zero;
+                }
+
+                var merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+                {
+                    merged[(string)entry.Key] = (string?)entry.Value ?? string.Empty;
+                }
+
+                foreach (var pair in additional)
+                {
+                    merged[pair.Key] = pair.Value;
+                }
+
+                return BuildEnvironmentBlock(merged);
+            }
+
+            // A minimal environment holding only what a console program typically needs to run.
+            var systemRoot = GetEnvironmentVariableOrEmpty("SystemRoot");
+            var temp = string.IsNullOrEmpty(workingDirectory) ? GetEnvironmentVariableOrEmpty("TEMP") : workingDirectory!;
+            var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SystemRoot"] = systemRoot,
+                ["SystemDrive"] = GetEnvironmentVariableOrEmpty("SystemDrive"),
+                ["windir"] = GetEnvironmentVariableOrEmpty("windir"),
+                ["ComSpec"] = GetEnvironmentVariableOrEmpty("ComSpec"),
+                ["PATH"] = systemRoot + @"\system32;" + systemRoot,
+                ["PATHEXT"] = ".COM;.EXE;.BAT;.CMD",
+                ["TEMP"] = temp,
+                ["TMP"] = temp,
+                ["NUMBER_OF_PROCESSORS"] = GetEnvironmentVariableOrEmpty("NUMBER_OF_PROCESSORS"),
+                ["PROCESSOR_ARCHITECTURE"] = GetEnvironmentVariableOrEmpty("PROCESSOR_ARCHITECTURE"),
+                ["OS"] = "Windows_NT",
+            };
+
+            foreach (var pair in additional)
+            {
+                variables[pair.Key] = pair.Value;
+            }
+
+            return BuildEnvironmentBlock(variables);
         }
 
         /// <summary>

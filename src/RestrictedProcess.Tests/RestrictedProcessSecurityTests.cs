@@ -389,6 +389,57 @@ class Program
             Assert.NotEqual(ProcessExecutionResultType.TimeLimit, result.Type);
         }
 
+        [Fact]
+        public void RestrictedProcessShouldNotSeeParentEnvironmentVariables()
+        {
+            const string PrintSecretSourceCode = @"using System;
+class Program
+{
+    public static void Main()
+    {
+        Console.WriteLine(Environment.GetEnvironmentVariable(""RP_TEST_SECRET"") ?? ""<null>"");
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldNotSeeParentEnvironmentVariables.exe", PrintSecretSourceCode);
+
+            Environment.SetEnvironmentVariable("RP_TEST_SECRET", "super-secret-value");
+            try
+            {
+                var result = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+                Assert.Equal(ProcessExecutionResultType.Success, result.Type);
+                Assert.Equal("<null>", result.ReceivedOutput.Trim());
+
+                // Control: the legacy options inherit the full parent environment
+                var legacyResult = new RestrictedProcessExecutor(RestrictedProcessOptions.Legacy).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+                Assert.Equal("super-secret-value", legacyResult.ReceivedOutput.Trim());
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("RP_TEST_SECRET", null);
+            }
+        }
+
+        [Fact]
+        public void RestrictedProcessShouldSeeAdditionalEnvironmentVariables()
+        {
+            const string PrintValueSourceCode = @"using System;
+class Program
+{
+    public static void Main()
+    {
+        Console.WriteLine(Environment.GetEnvironmentVariable(""RP_EXTRA"") ?? ""<null>"");
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldSeeAdditionalEnvironmentVariables.exe", PrintValueSourceCode);
+
+            var options = new RestrictedProcessOptions();
+            options.AdditionalEnvironmentVariables["RP_EXTRA"] = "hello-sandbox";
+
+            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            Assert.Equal(ProcessExecutionResultType.Success, result.Type);
+            Assert.Equal("hello-sandbox", result.ReceivedOutput.Trim());
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct NativeSecurityAttributes
         {
