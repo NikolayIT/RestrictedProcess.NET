@@ -1,11 +1,15 @@
 ﻿namespace RestrictedProcess.Tests
 {
+    using System;
+    using System.Runtime.InteropServices;
     using System.Windows.Forms;
 
     using Xunit;
 
     public class RestrictedProcessSecurityTests : BaseExecutorsTestClass
     {
+        private const uint WaitObject0 = 0;
+
         [Fact]
         public void RestrictedProcessShouldNotBeAbleToCreateFiles()
         {
@@ -233,6 +237,177 @@ class Program
             Assert.NotNull(result);
             Assert.Equal(ProcessExecutionResultType.Success, result.Type);
             Assert.Equal("4096", result.ReceivedOutput.Trim()); // S-1-16-4096 = Low integrity level
+        }
+
+        [Fact]
+        public void RestrictedProcessShouldNotInheritUnrelatedHandles()
+        {
+            const string SetEventSourceCode = @"using System;
+using System.Runtime.InteropServices;
+class Program
+{
+    [DllImport(""kernel32.dll"", SetLastError = true)]
+    static extern bool SetEvent(IntPtr eventHandle);
+
+    public static void Main(string[] args)
+    {
+        Console.WriteLine(SetEvent((IntPtr)long.Parse(args[0])));
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldNotInheritUnrelatedHandles.exe", SetEventSourceCode);
+
+            // An inheritable event handle simulates any sensitive handle the host holds open.
+            // Inherited handles keep their numeric value, so the child receives it as an argument.
+            var securityAttributes = new NativeSecurityAttributes
+            {
+                Length = Marshal.SizeOf<NativeSecurityAttributes>(),
+                SecurityDescriptor = IntPtr.Zero,
+                InheritHandle = 1,
+            };
+            var eventHandle = NativeMethods.CreateEvent(ref securityAttributes, true, false, null);
+            Assert.NotEqual(IntPtr.Zero, eventHandle);
+
+            try
+            {
+                var arguments = new[] { eventHandle.ToInt64().ToString() };
+
+                // With the handle whitelist the event handle is not inherited, so the child cannot
+                // signal it: the strict-handle-checks mitigation turns the bad reference into a crash,
+                // but either way the event stays unsignaled.
+                var result = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024, arguments);
+                Assert.NotEqual("True", result.ReceivedOutput.Trim());
+                Assert.NotEqual(WaitObject0, NativeMethods.WaitForSingleObject(eventHandle, 0));
+
+                // Control run: without the handle whitelist the leaked handle is inherited and usable
+                var permissiveOptions = new RestrictedProcessOptions { RestrictInheritedHandles = false };
+                var permissiveResult = new RestrictedProcessExecutor(permissiveOptions).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024, arguments);
+                Assert.Equal("True", permissiveResult.ReceivedOutput.Trim());
+                Assert.Equal(WaitObject0, NativeMethods.WaitForSingleObject(eventHandle, 0));
+            }
+            finally
+            {
+                NativeMethods.CloseHandle(eventHandle);
+            }
+        }
+
+        [Fact]
+        public void RestrictedProcessShouldHaveChildProcessCreationBlockedByPolicy()
+        {
+            const string PrintChildProcessPolicySourceCode = @"using System;
+using System.Runtime.InteropServices;
+class Program
+{
+    [DllImport(""kernel32.dll"")]
+    static extern IntPtr GetCurrentProcess();
+
+    [DllImport(""kernel32.dll"", SetLastError = true)]
+    static extern bool GetProcessMitigationPolicy(IntPtr process, int policy, out int buffer, IntPtr length);
+
+    public static void Main()
+    {
+        int flags;
+        if (!GetProcessMitigationPolicy(GetCurrentProcess(), 13 /* ProcessChildProcessPolicy */, out flags, (IntPtr)4))
+        {
+            throw new Exception(""GetProcessMitigationPolicy failed!"");
+        }
+        Console.WriteLine(flags & 1); // NoChildProcessCreation
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldHaveChildProcessCreationBlockedByPolicy.exe", PrintChildProcessPolicySourceCode);
+
+            var process = new RestrictedProcessExecutor();
+            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+
+            Assert.NotNull(result);
+            Assert.Equal(ProcessExecutionResultType.Success, result.Type);
+            Assert.Equal("1", result.ReceivedOutput.Trim());
+        }
+
+        [Fact]
+        public void RestrictedProcessShouldApplyDefaultProcessMitigations()
+        {
+            const string PrintExtensionPointPolicySourceCode = @"using System;
+using System.Runtime.InteropServices;
+class Program
+{
+    [DllImport(""kernel32.dll"")]
+    static extern IntPtr GetCurrentProcess();
+
+    [DllImport(""kernel32.dll"", SetLastError = true)]
+    static extern bool GetProcessMitigationPolicy(IntPtr process, int policy, out int buffer, IntPtr length);
+
+    public static void Main()
+    {
+        int flags;
+        if (!GetProcessMitigationPolicy(GetCurrentProcess(), 6 /* ProcessExtensionPointDisablePolicy */, out flags, (IntPtr)4))
+        {
+            throw new Exception(""GetProcessMitigationPolicy failed!"");
+        }
+        Console.WriteLine(flags & 1); // DisableExtensionPoints
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldApplyDefaultProcessMitigations.exe", PrintExtensionPointPolicySourceCode);
+
+            var process = new RestrictedProcessExecutor();
+            var result = process.Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+
+            Assert.NotNull(result);
+            Assert.Equal(ProcessExecutionResultType.Success, result.Type);
+            Assert.Equal("1", result.ReceivedOutput.Trim());
+        }
+
+        [Fact]
+        public void RestrictedProcessShouldDieOnWin32kSystemCallWhenLockedDown()
+        {
+            const string ShowMessageBoxSourceCode = @"using System;
+using System.Runtime.InteropServices;
+class Program
+{
+    [DllImport(""user32.dll"", CharSet = CharSet.Unicode)]
+    static extern int MessageBoxW(IntPtr window, string text, string caption, uint type);
+
+    public static void Main()
+    {
+        MessageBoxW(IntPtr.Zero, ""sandbox"", ""sandbox"", 0);
+        Console.WriteLine(""SHOWED"");
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldDieOnWin32kSystemCallWhenLockedDown.exe", ShowMessageBoxSourceCode);
+
+            var options = new RestrictedProcessOptions
+            {
+                Mitigations = ProcessMitigations.Default | ProcessMitigations.Win32kSystemCallDisable,
+            };
+            var process = new RestrictedProcessExecutor(options);
+            var result = process.Execute(exePath, string.Empty, 1000, 32 * 1024 * 1024);
+
+            Assert.NotNull(result);
+            Assert.DoesNotContain("SHOWED", result.ReceivedOutput);
+            Assert.NotEqual(0, result.ExitCode);
+
+            // TimeLimit would mean the message box was actually shown and the process had to be killed
+            Assert.NotEqual(ProcessExecutionResultType.TimeLimit, result.Type);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeSecurityAttributes
+        {
+            public int Length;
+            public IntPtr SecurityDescriptor;
+            public int InheritHandle;
+        }
+
+        private static class NativeMethods
+        {
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern IntPtr CreateEvent(ref NativeSecurityAttributes eventAttributes, bool manualReset, bool initialState, string name);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool CloseHandle(IntPtr handle);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            public static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
         }
     }
 }

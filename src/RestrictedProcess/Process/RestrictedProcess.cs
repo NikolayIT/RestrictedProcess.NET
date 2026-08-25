@@ -47,7 +47,7 @@ namespace RestrictedProcess.Process
             var threadSecurityAttributes = new SecurityAttributes();
             this.processInformation = default(ProcessInformation);
 
-            const uint CreationFlags = (uint)(
+            var creationFlags = (uint)(
                 CreateProcessFlags.CREATE_SUSPENDED |
                 CreateProcessFlags.CREATE_BREAKAWAY_FROM_JOB |
                 CreateProcessFlags.CREATE_UNICODE_ENVIRONMENT |
@@ -74,29 +74,43 @@ namespace RestrictedProcess.Process
                 commandLine = fileName;
             }
 
-            if (!NativeMethods.CreateProcessAsUser(
-                    restrictedToken,
-                    null,
-                    commandLine,
-                    processSecurityAttributes,
-                    threadSecurityAttributes,
-                    true, // In order to standard input, output and error redirection work, the handles must be inheritable and the CreateProcess() API must specify that inheritable handles are to be inherited by the child process by specifying TRUE in the bInheritHandles parameter.
-                    CreationFlags,
-                    IntPtr.Zero,
-                    workingDirectory,
-                    startupInfo,
-                    out this.processInformation))
+            ProcThreadAttributeList? attributeList = null;
+            try
             {
-                throw new Win32Exception();
+                attributeList = this.CreateProcThreadAttributeList(startupInfo);
+                if (attributeList != null)
+                {
+                    startupInfo.UseExtendedStartupInfo(attributeList.Pointer);
+                    creationFlags |= (uint)CreateProcessFlags.EXTENDED_STARTUPINFO_PRESENT;
+                }
+
+                if (!NativeMethods.CreateProcessAsUser(
+                        restrictedToken,
+                        null,
+                        commandLine,
+                        processSecurityAttributes,
+                        threadSecurityAttributes,
+                        true, // In order to standard input, output and error redirection work, the handles must be inheritable and the CreateProcess() API must specify that inheritable handles are to be inherited by the child process by specifying TRUE in the bInheritHandles parameter.
+                        creationFlags,
+                        IntPtr.Zero,
+                        workingDirectory,
+                        startupInfo,
+                        out this.processInformation))
+                {
+                    throw new Win32Exception();
+                }
+            }
+            finally
+            {
+                // This is a very important line! Without disposing the startupInfo handles, reading the standard output (or error) will hang forever.
+                // Same problem described here: http://social.msdn.microsoft.com/Forums/vstudio/en-US/3c25a2e8-b1ea-4fc4-927b-cb865d435147/how-does-processstart-work-in-getting-output
+                startupInfo.Dispose();
+
+                attributeList?.Dispose();
+                NativeMethods.CloseHandle(restrictedToken);
             }
 
             this.safeProcessHandle = new SafeProcessHandle(this.processInformation.Process);
-
-            // This is a very important line! Without disposing the startupInfo handles, reading the standard output (or error) will hang forever.
-            // Same problem described here: http://social.msdn.microsoft.com/Forums/vstudio/en-US/3c25a2e8-b1ea-4fc4-927b-cb865d435147/how-does-processstart-work-in-getting-output
-            startupInfo.Dispose();
-
-            NativeMethods.CloseHandle(restrictedToken);
         }
 
         public StreamWriter StandardInput { get; private set; } = null!;
@@ -435,6 +449,54 @@ namespace RestrictedProcess.Process
                 {
                     tempHandle.Close();
                 }
+            }
+        }
+
+        /// <summary>
+        /// Builds the PROC_THREAD_ATTRIBUTE_LIST carrying the enabled process creation hardening:
+        /// the inheritable handle whitelist (only the three standard IO pipes), the mitigation
+        /// policies and the child process creation ban. Returns null when nothing is enabled.
+        /// </summary>
+        private ProcThreadAttributeList? CreateProcThreadAttributeList(StartupInfo startupInfo)
+        {
+            var attributeCount = (this.options.RestrictInheritedHandles ? 1 : 0)
+                                 + (this.options.Mitigations != ProcessMitigations.None ? 1 : 0)
+                                 + (this.options.DisallowChildProcesses ? 1 : 0);
+            if (attributeCount == 0)
+            {
+                return null;
+            }
+
+            var attributeList = new ProcThreadAttributeList(attributeCount);
+            try
+            {
+                if (this.options.RestrictInheritedHandles)
+                {
+                    attributeList.SetHandleList(
+                        new[]
+                        {
+                            startupInfo.StandardInputHandle!.DangerousGetHandle(),
+                            startupInfo.StandardOutputHandle!.DangerousGetHandle(),
+                            startupInfo.StandardErrorHandle!.DangerousGetHandle(),
+                        });
+                }
+
+                if (this.options.Mitigations != ProcessMitigations.None)
+                {
+                    attributeList.SetMitigationPolicy((ulong)this.options.Mitigations);
+                }
+
+                if (this.options.DisallowChildProcesses)
+                {
+                    attributeList.SetChildProcessRestricted();
+                }
+
+                return attributeList;
+            }
+            catch
+            {
+                attributeList.Dispose();
+                throw;
             }
         }
 

@@ -58,8 +58,26 @@ namespace RestrictedProcess.Process
 
         public SafeFileHandle? StandardErrorHandle = new SafeFileHandle(IntPtr.Zero, false);
 
+        /// <summary>
+        /// The lpAttributeList member of STARTUPINFOEX. Only marshaled to the native side
+        /// when <see cref="UseExtendedStartupInfo"/> switches the structure to its extended form.
+        /// </summary>
+        public IntPtr AttributeList = IntPtr.Zero;
+
         public StartupInfo()
         {
+            // The native size of the plain STARTUPINFO structure; the trailing AttributeList
+            // field is only included after a UseExtendedStartupInfo call.
+            this.SizeInBytes = Marshal.SizeOf(this) - IntPtr.Size;
+        }
+
+        /// <summary>
+        /// Turns the structure into a STARTUPINFOEX carrying the given PROC_THREAD_ATTRIBUTE_LIST.
+        /// The process must then be created with the EXTENDED_STARTUPINFO_PRESENT flag.
+        /// </summary>
+        public void UseExtendedStartupInfo(IntPtr attributeList)
+        {
+            this.AttributeList = attributeList;
             this.SizeInBytes = Marshal.SizeOf(this);
         }
 

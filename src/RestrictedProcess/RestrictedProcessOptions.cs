@@ -20,6 +20,9 @@ namespace RestrictedProcess
             {
                 TokenLevel = TokenLevel.Unrestricted,
                 IntegrityLevel = IntegrityLevel.Low,
+                DisallowChildProcesses = false,
+                RestrictInheritedHandles = false,
+                Mitigations = ProcessMitigations.None,
             };
 
         /// <summary>
@@ -31,5 +34,24 @@ namespace RestrictedProcess
         /// Gets or sets the mandatory integrity level of the sandboxed process.
         /// </summary>
         public IntegrityLevel IntegrityLevel { get; set; } = IntegrityLevel.Low;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the process is prevented from creating
+        /// child processes at the kernel level (PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY),
+        /// independently of the job object's active process limit.
+        /// </summary>
+        public bool DisallowChildProcesses { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the process inherits only its three standard
+        /// IO pipe handles instead of every inheritable handle of the parent process
+        /// (PROC_THREAD_ATTRIBUTE_HANDLE_LIST).
+        /// </summary>
+        public bool RestrictInheritedHandles { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets the process creation mitigation policies applied to the process.
+        /// </summary>
+        public ProcessMitigations Mitigations { get; set; } = ProcessMitigations.Default;
     }
 }
