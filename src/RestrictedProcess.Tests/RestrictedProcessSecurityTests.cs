@@ -390,6 +390,45 @@ class Program
         }
 
         [Fact]
+        public void RestrictedProcessShouldRunOnAlternateDesktop()
+        {
+            const string PrintDesktopNameSourceCode = @"using System;
+using System.Runtime.InteropServices;
+using System.Text;
+class Program
+{
+    [DllImport(""kernel32.dll"")]
+    static extern uint GetCurrentThreadId();
+
+    [DllImport(""user32.dll"")]
+    static extern IntPtr GetThreadDesktop(uint threadId);
+
+    [DllImport(""user32.dll"", CharSet = CharSet.Unicode)]
+    static extern bool GetUserObjectInformationW(IntPtr obj, int index, StringBuilder info, int length, out int lengthNeeded);
+
+    public static void Main()
+    {
+        IntPtr desktop = GetThreadDesktop(GetCurrentThreadId());
+        var name = new StringBuilder(256);
+        int needed;
+        GetUserObjectInformationW(desktop, 2 /* UOI_NAME */, name, name.Capacity, out needed);
+        Console.WriteLine(name.ToString());
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldRunOnAlternateDesktop.exe", PrintDesktopNameSourceCode);
+
+            var result = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            Assert.Equal(ProcessExecutionResultType.Success, result.Type);
+            Assert.StartsWith("rp_", result.ReceivedOutput.Trim());
+
+            // Control: without the alternate desktop the child runs on the host's desktop
+            var options = new RestrictedProcessOptions { UseAlternateDesktop = false };
+            var hostResult = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 1500, 32 * 1024 * 1024);
+            Assert.Equal(ProcessExecutionResultType.Success, hostResult.Type);
+            Assert.DoesNotContain("rp_", hostResult.ReceivedOutput);
+        }
+
+        [Fact]
         public void RestrictedProcessShouldNotSeeParentEnvironmentVariables()
         {
             const string PrintSecretSourceCode = @"using System;

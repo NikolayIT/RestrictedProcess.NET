@@ -25,6 +25,7 @@ namespace RestrictedProcess.Process
         private readonly RestrictedProcessOptions options;
         private ProcessInformation processInformation;
         private JobObject? jobObject;
+        private SandboxDesktop? desktop;
         private int exitCode;
 
         public RestrictedProcess(string fileName, string? workingDirectory, IEnumerable<string>? arguments = null, int bufferSize = 4096, Encoding? encoding = null, RestrictedProcessOptions? options = null)
@@ -75,6 +76,12 @@ namespace RestrictedProcess.Process
                 commandLine = fileName;
             }
 
+            if (this.options.UseAlternateDesktop)
+            {
+                this.desktop = new SandboxDesktop();
+                startupInfo.Desktop = Marshal.StringToHGlobalUni(this.desktop.Name);
+            }
+
             ProcThreadAttributeList? attributeList = null;
             var environmentBlock = IntPtr.Zero;
             try
@@ -108,6 +115,12 @@ namespace RestrictedProcess.Process
             {
                 // This is a very important line! Without disposing the startupInfo handles, reading the standard output (or error) will hang forever.
                 // Same problem described here: http://social.msdn.microsoft.com/Forums/vstudio/en-US/3c25a2e8-b1ea-4fc4-927b-cb865d435147/how-does-processstart-work-in-getting-output
+                if (startupInfo.Desktop != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(startupInfo.Desktop);
+                    startupInfo.Desktop = IntPtr.Zero;
+                }
+
                 startupInfo.Dispose();
 
                 attributeList?.Dispose();
@@ -285,6 +298,7 @@ namespace RestrictedProcess.Process
                 this.safeProcessHandle.Dispose();
                 NativeMethods.CloseHandle(this.processInformation.Thread);
                 this.jobObject?.Dispose();
+                this.desktop?.Dispose();
 
                 // Disposing these object causes "System.InvalidOperationException: The stream is currently in use by a previous operation on the stream."
                 // this.StandardInput.Dispose();

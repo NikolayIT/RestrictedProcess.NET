@@ -27,6 +27,7 @@ namespace RestrictedProcess
                 RestrictInheritedHandles = false,
                 Mitigations = ProcessMitigations.None,
                 ScrubEnvironment = false,
+                UseAlternateDesktop = false,
             };
 
         /// <summary>
@@ -57,6 +58,12 @@ namespace RestrictedProcess
         /// Gets or sets the process creation mitigation policies applied to the process.
         /// </summary>
         public ProcessMitigations Mitigations { get; set; } = ProcessMitigations.Default;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the process runs on a throwaway desktop, so it
+        /// cannot enumerate, read or send window messages to windows on the interactive desktop.
+        /// </summary>
+        public bool UseAlternateDesktop { get; set; } = true;
 
         /// <summary>
         /// Gets or sets a value indicating whether the process receives a minimal environment

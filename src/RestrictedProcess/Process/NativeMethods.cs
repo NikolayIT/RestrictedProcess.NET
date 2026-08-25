@@ -292,5 +292,18 @@ namespace RestrictedProcess.Process
 
         [DllImport("kernel32.dll")]
         internal static extern IntPtr LocalFree(IntPtr memoryHandler);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern IntPtr CreateDesktop(
+            string desktopName,
+            IntPtr device,
+            IntPtr deviceMode,
+            int flags,
+            uint desiredAccess,
+            IntPtr securityAttributes);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool CloseDesktop(IntPtr desktop);
     }
 }
