@@ -16,10 +16,19 @@ class Program
 {
     public static void Main(string[] args)
     {
+        // Burn a fixed amount of *processor* time, not wall time. Spinning for a wall-clock duration
+        // accumulates however much CPU the machine happens to spare, which on a loaded build agent can be
+        // a fraction of it - and then an assertion about processor time fails for no good reason.
         Console.Error.WriteLine(""a warning on standard error"");
-        var stopwatch = Stopwatch.StartNew();
+        var self = Process.GetCurrentProcess();
+        var target = TimeSpan.FromMilliseconds(int.Parse(args[0]));
         long counter = 0;
-        while (stopwatch.ElapsedMilliseconds < int.Parse(args[0])) { counter++; }
+        while (self.TotalProcessorTime < target)
+        {
+            for (var i = 0; i < 200000; i++) { counter++; }
+            self.Refresh();
+        }
+
         Console.WriteLine(counter);
     }
 }";
