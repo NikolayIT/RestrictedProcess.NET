@@ -1,0 +1,58 @@
+name: Publish
+
+# Publishing to nuget.org is irreversible: a version that has been pushed can never be replaced, only
+# unlisted. So this runs only for a published GitHub release (or a deliberate manual dispatch), and it
+# refuses to push anything that does not build and pass its tests first.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    # Gives you somewhere to require a manual approval before the push. Remove this line if you would
+    # rather not use one - but then clear the Environment field on the nuget.org policy to match.
+    environment: release
+
+    permissions:
+      # Required for Trusted Publishing: without it GitHub will not issue the OIDC token, and the login
+      # step fails to get a key.
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      # GeneratePackageOnBuild puts the .nupkg and .snupkg in bin/Release, so there is no separate pack
+      # step and what gets pushed is exactly what was built and tested.
+      - name: Build
+        run: dotnet build src/RestrictedProcess.sln --configuration Release
+
+      - name: Test
+        run: dotnet test --solution src/RestrictedProcess.sln --configuration Release
+
+      # The temporary key nuget.org issues is valid for one hour, so it is requested immediately before
+      # the push rather than at the start of the job.
+      - name: NuGet login
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push to nuget.org
+        run: >
+          dotnet nuget push src/RestrictedProcess/bin/Release/*.nupkg
+          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
