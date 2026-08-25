@@ -13,7 +13,7 @@ namespace RestrictedProcess.JobObjects
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         internal static extern IntPtr CreateJobObject([In]ref SecurityAttributes jobAttributes, string? name);
 
-        [DllImport("kernel32.dll")]
+        [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern bool SetInformationJobObject(
             IntPtr job,
             InfoClass infoType,
@@ -23,11 +23,11 @@ namespace RestrictedProcess.JobObjects
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
 
-        [DllImport("kernel32.dll")]
+        [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern bool QueryInformationJobObject(
             IntPtr job,
             InfoClass jobObjectInformationClass,
-            out IntPtr jobObjectInfo,
+            IntPtr jobObjectInfo,
             uint jobObjectInfoLength,
             IntPtr returnLength);
 

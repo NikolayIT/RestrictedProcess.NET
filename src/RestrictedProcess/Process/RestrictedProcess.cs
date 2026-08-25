@@ -183,6 +183,16 @@ namespace RestrictedProcess.Process
             }
         }
 
+        /// <summary>
+        /// Gets the peak amount of memory (in bytes) committed by all processes ever associated with the job object.
+        /// The job object tracks this value even after the process has exited, which makes it more reliable
+        /// than sampling <see cref="PeakWorkingSetSize"/> for short-lived processes.
+        /// </summary>
+        public long PeakJobMemoryUsed =>
+            this.jobObject == null
+                ? 0
+                : (long)(ulong)this.jobObject.GetExtendedLimitInformation().PeakJobMemoryUsed;
+
         public long PeakWorkingSetSize
         {
             get
@@ -212,7 +222,10 @@ namespace RestrictedProcess.Process
                 this.jobObject = new JobObject();
                 this.jobObject.SetExtendedLimitInformation(PrepareJobObject.GetExtendedLimitInformation(timeLimit * 2, memoryLimit * 2));
                 this.jobObject.SetBasicUiRestrictions(PrepareJobObject.GetUiRestrictions());
-                this.jobObject.AddProcess(this.processInformation.Process);
+                if (!this.jobObject.AddProcess(this.processInformation.Process))
+                {
+                    throw new Win32Exception();
+                }
 
                 NativeMethods.ResumeThread(this.processInformation.Thread);
             }

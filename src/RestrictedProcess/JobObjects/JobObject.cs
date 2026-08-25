@@ -29,10 +29,17 @@ namespace RestrictedProcess.JobObjects
         {
             var length = Marshal.SizeOf(typeof(ExtendedLimitInformation));
             var extendedInfoPointer = Marshal.AllocHGlobal(length);
-            Marshal.StructureToPtr(extendedInfo, extendedInfoPointer, false);
-            if (!NativeMethods.SetInformationJobObject(this.handle, InfoClass.ExtendedLimitInformation, extendedInfoPointer, (uint)length))
+            try
             {
-                throw new Win32Exception();
+                Marshal.StructureToPtr(extendedInfo, extendedInfoPointer, false);
+                if (!NativeMethods.SetInformationJobObject(this.handle, InfoClass.ExtendedLimitInformation, extendedInfoPointer, (uint)length))
+                {
+                    throw new Win32Exception();
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(extendedInfoPointer);
             }
         }
 
@@ -40,21 +47,37 @@ namespace RestrictedProcess.JobObjects
         {
             var length = Marshal.SizeOf(typeof(BasicUiRestrictions));
             var uiRestrictionsInfoPointer = Marshal.AllocHGlobal(length);
-            Marshal.StructureToPtr(uiRestrictions, uiRestrictionsInfoPointer, false);
-            if (!NativeMethods.SetInformationJobObject(this.handle, InfoClass.BasicUiRestrictions, uiRestrictionsInfoPointer, (uint)length))
+            try
             {
-                throw new Win32Exception();
+                Marshal.StructureToPtr(uiRestrictions, uiRestrictionsInfoPointer, false);
+                if (!NativeMethods.SetInformationJobObject(this.handle, InfoClass.BasicUiRestrictions, uiRestrictionsInfoPointer, (uint)length))
+                {
+                    throw new Win32Exception();
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(uiRestrictionsInfoPointer);
             }
         }
 
         public ExtendedLimitInformation GetExtendedLimitInformation()
         {
-            var extendedLimitInformation = default(ExtendedLimitInformation);
             var length = Marshal.SizeOf(typeof(ExtendedLimitInformation));
-            var extendedLimitInformationInfoPointer = Marshal.AllocHGlobal(length);
-            Marshal.StructureToPtr(extendedLimitInformation, extendedLimitInformationInfoPointer, false);
-            NativeMethods.QueryInformationJobObject(this.handle, InfoClass.ExtendedLimitInformation, out extendedLimitInformationInfoPointer, (uint)length, IntPtr.Zero);
-            return extendedLimitInformation;
+            var extendedLimitInformationPointer = Marshal.AllocHGlobal(length);
+            try
+            {
+                if (!NativeMethods.QueryInformationJobObject(this.handle, InfoClass.ExtendedLimitInformation, extendedLimitInformationPointer, (uint)length, IntPtr.Zero))
+                {
+                    throw new Win32Exception();
+                }
+
+                return Marshal.PtrToStructure<ExtendedLimitInformation>(extendedLimitInformationPointer);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(extendedLimitInformationPointer);
+            }
         }
 
         //// // The peak memory used by any process ever associated with the job.

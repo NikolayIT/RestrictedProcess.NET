@@ -133,6 +133,11 @@ namespace RestrictedProcess
 
                 Debug.Assert(restrictedProcess.HasExited, "Restricted process didn't exit!");
 
+                // The job object keeps track of the peak memory committed by the process even after it has
+                // exited, so use it in addition to the sampled working set (short-lived processes can consume
+                // and release memory between two samples).
+                result.MemoryUsed = Math.Max(result.MemoryUsed, restrictedProcess.PeakJobMemoryUsed);
+
                 // Report exit code and total process working time
                 result.ExitCode = restrictedProcess.ExitCode;
                 result.TimeWorked = restrictedProcess.ExitTime - restrictedProcess.StartTime;
