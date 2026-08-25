@@ -12,17 +12,17 @@ namespace RestrictedProcess
     using System.Threading;
     using System.Threading.Tasks;
 
-    using log4net;
+    using Microsoft.Extensions.Logging;
+    using Microsoft.Extensions.Logging.Abstractions;
 
     // TODO: Implement memory constraints
     public class StandardProcessExecutor : IExecutor
     {
-        private static ILog logger;
+        private readonly ILogger logger;
 
-        public StandardProcessExecutor()
+        public StandardProcessExecutor(ILogger logger = null)
         {
-            logger = LogManager.GetLogger(typeof(StandardProcessExecutor));
-            //// logger.Info("Initialized.");
+            this.logger = logger ?? NullLogger.Instance;
         }
 
         public ProcessExecutionResult Execute(string fileName, string inputData, int timeLimit, int memoryLimit, IEnumerable<string> executionArguments = null)
@@ -133,7 +133,7 @@ namespace RestrictedProcess
                 }
                 catch (AggregateException ex)
                 {
-                    logger.Warn("AggregateException caught.", ex.InnerException);
+                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
                 }
 
                 // Close the task that gets the process error output
@@ -143,7 +143,7 @@ namespace RestrictedProcess
                 }
                 catch (AggregateException ex)
                 {
-                    logger.Warn("AggregateException caught.", ex.InnerException);
+                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
                 }
 
                 // Close the task that gets the process output
@@ -153,7 +153,7 @@ namespace RestrictedProcess
                 }
                 catch (AggregateException ex)
                 {
-                    logger.Warn("AggregateException caught.", ex.InnerException);
+                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
                 }
 
                 Debug.Assert(process.HasExited, "Standard process didn't exit!");

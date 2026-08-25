@@ -3,8 +3,6 @@
 // Licensed under the Apache License. See LICENSE in the project root for license information.
 // </copyright>
 
-[assembly: log4net.Config.XmlConfigurator(Watch = true)]
-
 namespace RestrictedProcess
 {
     using System;
@@ -14,18 +12,18 @@ namespace RestrictedProcess
     using System.Threading;
     using System.Threading.Tasks;
 
-    using log4net;
+    using Microsoft.Extensions.Logging;
+    using Microsoft.Extensions.Logging.Abstractions;
 
     using RestrictedProcess.Process;
 
     public class RestrictedProcessExecutor : IExecutor
     {
-        private static ILog logger;
+        private readonly ILogger logger;
 
-        public RestrictedProcessExecutor()
+        public RestrictedProcessExecutor(ILogger logger = null)
         {
-            logger = LogManager.GetLogger(typeof(RestrictedProcessExecutor));
-            //// logger.Info("Initialized.");
+            this.logger = logger ?? NullLogger.Instance;
         }
 
         // TODO: double check and maybe change order of parameters
@@ -110,7 +108,7 @@ namespace RestrictedProcess
                 }
                 catch (AggregateException ex)
                 {
-                    logger.Warn("AggregateException caught.", ex.InnerException);
+                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
                 }
 
                 // Close the task that gets the process error output
@@ -120,7 +118,7 @@ namespace RestrictedProcess
                 }
                 catch (AggregateException ex)
                 {
-                    logger.Warn("AggregateException caught.", ex.InnerException);
+                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
                 }
 
                 // Close the task that gets the process output
@@ -130,7 +128,7 @@ namespace RestrictedProcess
                 }
                 catch (AggregateException ex)
                 {
-                    logger.Warn("AggregateException caught.", ex.InnerException);
+                    this.logger.LogWarning(ex.InnerException, "AggregateException caught.");
                 }
 
                 Debug.Assert(restrictedProcess.HasExited, "Restricted process didn't exit!");
