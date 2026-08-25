@@ -52,6 +52,15 @@ namespace RestrictedProcess
         public bool UseAlternateDesktop { get; set; } = true;
 
         /// <summary>
+        /// Gets or sets a value indicating whether the process is denied network access by running it
+        /// inside an AppContainer with no network capabilities (the Windows Firewall then blocks its
+        /// sockets). Off by default. Requires the Windows Firewall / Base Filtering Engine service to
+        /// be running, and grants the "ALL APPLICATION PACKAGES" identity read and execute rights on
+        /// the executable so the AppContainer process can load it.
+        /// </summary>
+        public bool BlockNetworkAccess { get; set; }
+
+        /// <summary>
         /// Gets or sets the maximum number of processes that may be simultaneously active in the job.
         /// </summary>
         public int ActiveProcessLimit { get; set; } = 1;

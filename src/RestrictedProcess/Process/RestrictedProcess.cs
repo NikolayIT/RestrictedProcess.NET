@@ -26,6 +26,8 @@ namespace RestrictedProcess.Process
         private ProcessInformation processInformation;
         private JobObject? jobObject;
         private SandboxDesktop? desktop;
+        private IntPtr appContainerSid = IntPtr.Zero;
+        private string? appContainerName;
         private int exitCode;
 
         public RestrictedProcess(string fileName, string? workingDirectory, IEnumerable<string>? arguments = null, int bufferSize = 4096, Encoding? encoding = null, RestrictedProcessOptions? options = null)
@@ -82,6 +84,33 @@ namespace RestrictedProcess.Process
                 startupInfo.Desktop = Marshal.StringToHGlobalUni(this.desktop.Name);
             }
 
+            if (this.options.BlockNetworkAccess)
+            {
+                // Creating a per-run AppContainer profile (a derived SID alone is not enough - the OS
+                // needs the registered profile to launch into it) and granting the "ALL APPLICATION
+                // PACKAGES" identity read/execute on the executable so the AppContainer can load it.
+                this.appContainerName = "RestrictedProcess." + Guid.NewGuid().ToString("N");
+                var hr = NativeMethods.CreateAppContainerProfile(
+                    this.appContainerName, this.appContainerName, this.appContainerName, null, 0, out this.appContainerSid);
+                if (hr != 0)
+                {
+                    // HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)
+                    if (hr == unchecked((int)0x800700B7))
+                    {
+                        if (NativeMethods.DeriveAppContainerSidFromAppContainerName(this.appContainerName, out this.appContainerSid) != 0)
+                        {
+                            throw new Win32Exception();
+                        }
+                    }
+                    else
+                    {
+                        throw new Win32Exception(hr);
+                    }
+                }
+
+                GrantAllApplicationPackagesAccess(fileName, workingDirectory);
+            }
+
             ProcThreadAttributeList? attributeList = null;
             var environmentBlock = IntPtr.Zero;
             try
@@ -97,7 +126,7 @@ namespace RestrictedProcess.Process
 
                 if (!NativeMethods.CreateProcessAsUser(
                         restrictedToken,
-                        null,
+                        this.options.BlockNetworkAccess ? fileName : null,
                         commandLine,
                         processSecurityAttributes,
                         threadSecurityAttributes,
@@ -316,6 +345,17 @@ namespace RestrictedProcess.Process
                 NativeMethods.CloseHandle(this.processInformation.Thread);
                 this.jobObject?.Dispose();
                 this.desktop?.Dispose();
+                if (this.appContainerSid != IntPtr.Zero)
+                {
+                    NativeMethods.FreeSid(this.appContainerSid);
+                    this.appContainerSid = IntPtr.Zero;
+                }
+
+                if (this.appContainerName != null)
+                {
+                    NativeMethods.DeleteAppContainerProfile(this.appContainerName);
+                    this.appContainerName = null;
+                }
 
                 // Disposing these object causes "System.InvalidOperationException: The stream is currently in use by a previous operation on the stream."
                 // this.StandardInput.Dispose();
@@ -416,6 +456,49 @@ namespace RestrictedProcess.Process
         private static string GetEnvironmentVariableOrEmpty(string name)
         {
             return Environment.GetEnvironmentVariable(name) ?? string.Empty;
+        }
+
+        /// <summary>
+        /// Grants the "ALL APPLICATION PACKAGES" identity (S-1-15-2-1) read and execute rights on the
+        /// executable and traverse rights on its directory, so a process running in an AppContainer
+        /// can load it. Uses icacls because it is inbox on every supported Windows version and needs
+        /// no additional access-control package for netstandard2.0.
+        /// </summary>
+        private static void GrantAllApplicationPackagesAccess(string fileName, string? workingDirectory)
+        {
+            RunIcacls(fileName, "(RX)");
+            if (!string.IsNullOrEmpty(workingDirectory))
+            {
+                RunIcacls(workingDirectory!, "(RX)");
+            }
+        }
+
+        private static void RunIcacls(string path, string rights)
+        {
+            var startInfo = new ProcessStartInfo("icacls")
+            {
+                Arguments = $"\"{path}\" /grant *S-1-15-2-1:{rights}",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+
+            using (var process = System.Diagnostics.Process.Start(startInfo))
+            {
+                if (process == null)
+                {
+                    throw new InvalidOperationException("Could not start icacls to grant AppContainer access.");
+                }
+
+                process.WaitForExit();
+
+                // Best effort: the executable may already be accessible to application packages
+                // (for example a system executable), in which case granting access can fail and is
+                // not required. Read the streams to avoid leaving the pipes full.
+                process.StandardError.ReadToEnd();
+                process.StandardOutput.ReadToEnd();
+            }
         }
 
         private void RedirectStandardIoHandles(ref StartupInfo startupInfo, int bufferSize, Encoding encoding)
@@ -563,6 +646,16 @@ namespace RestrictedProcess.Process
                 ["OS"] = "Windows_NT",
             };
 
+            if (this.options.BlockNetworkAccess)
+            {
+                // Creating an AppContainer process fails (ERROR_ENVVAR_NOT_FOUND) unless these
+                // profile variables, which the container uses to resolve its private storage, are present.
+                foreach (var name in new[] { "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ALLUSERSPROFILE", "ProgramData", "HOMEDRIVE", "HOMEPATH", "USERNAME" })
+                {
+                    variables[name] = GetEnvironmentVariableOrEmpty(name);
+                }
+            }
+
             foreach (var pair in additional)
             {
                 variables[pair.Key] = pair.Value;
@@ -580,7 +673,8 @@ namespace RestrictedProcess.Process
         {
             var attributeCount = (this.options.RestrictInheritedHandles ? 1 : 0)
                                  + (this.options.Mitigations != ProcessMitigations.None ? 1 : 0)
-                                 + (this.options.DisallowChildProcesses ? 1 : 0);
+                                 + (this.options.DisallowChildProcesses ? 1 : 0)
+                                 + (this.options.BlockNetworkAccess ? 1 : 0);
             if (attributeCount == 0)
             {
                 return null;
@@ -608,6 +702,11 @@ namespace RestrictedProcess.Process
                 if (this.options.DisallowChildProcesses)
                 {
                     attributeList.SetChildProcessRestricted();
+                }
+
+                if (this.options.BlockNetworkAccess)
+                {
+                    attributeList.SetSecurityCapabilities(this.appContainerSid);
                 }
 
                 return attributeList;

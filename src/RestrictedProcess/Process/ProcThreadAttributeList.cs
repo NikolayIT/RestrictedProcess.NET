@@ -21,6 +21,7 @@ namespace RestrictedProcess.Process
     {
         private const uint ProcThreadAttributeHandleList = 0x20002;
         private const uint ProcThreadAttributeMitigationPolicy = 0x20007;
+        private const uint ProcThreadAttributeSecurityCapabilities = 0x20009;
         private const uint ProcThreadAttributeChildProcessPolicy = 0x2000E;
 
         private const int ChildProcessPolicyRestricted = 0x1;
@@ -62,6 +63,26 @@ namespace RestrictedProcess.Process
             this.attributeValues.Add(value);
             Marshal.WriteInt64(value, unchecked((long)policy));
             this.UpdateAttribute(ProcThreadAttributeMitigationPolicy, value, sizeof(ulong));
+        }
+
+        /// <summary>
+        /// Runs the process inside the AppContainer identified by the given SID, with no
+        /// capabilities. The Windows Firewall then blocks the process from accessing the network.
+        /// </summary>
+        public void SetSecurityCapabilities(IntPtr appContainerSid)
+        {
+            var size = Marshal.SizeOf<SecurityCapabilities>();
+            var value = Marshal.AllocHGlobal(size);
+            this.attributeValues.Add(value);
+            var capabilities = new SecurityCapabilities
+            {
+                AppContainerSid = appContainerSid,
+                Capabilities = IntPtr.Zero,
+                CapabilityCount = 0,
+                Reserved = 0,
+            };
+            Marshal.StructureToPtr(capabilities, value, false);
+            this.UpdateAttribute(ProcThreadAttributeSecurityCapabilities, value, size);
         }
 
         /// <summary>

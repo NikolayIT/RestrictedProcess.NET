@@ -51,6 +51,7 @@ The process is started with a restricted token at low integrity level and placed
 - Cannot see the parent's handles (only its three standard IO pipes are inherited) or the parent's environment variables (it gets a minimal environment block)
 - Runs on a throwaway desktop, so it cannot read or message windows on the interactive desktop
 - Runs with process mitigation policies enabled (DEP, ASLR, strict handle checks, extension-point disable, image-load restrictions)
+- Can optionally be denied all network access (opt-in, see below)
 - Is killed automatically when the job handle is closed or on an unhandled exception
 - Is limited in the amount of memory it can commit
 
@@ -74,12 +75,21 @@ var options = new RestrictedProcessOptions
     PriorityClass = ProcessPriorityClass.High,
     CpuRateLimitPercent = null,                     // e.g. 25 caps the job to 25% of total CPU
     MaxOutputSize = 64 * 1024 * 1024,
+    BlockNetworkAccess = false,                     // opt-in; see below
 };
 
 IExecutor executor = new RestrictedProcessExecutor(options);
 ```
 
 A few mitigations are available but **off by default because they break the .NET Framework runtime**: `ProcessMitigations.Win32kSystemCallDisable` (user32 cannot initialize) and `ProcessMitigations.ProhibitDynamicCode` (blocks the JIT). Enable them only for native executables that don't need those subsystems.
+
+### Blocking network access
+
+Set `BlockNetworkAccess = true` to deny the process all network access. It is then launched inside an [AppContainer](https://learn.microsoft.com/windows/win32/secauthz/appcontainer-isolation) with no network capabilities, so the Windows Firewall blocks its sockets (including localhost). It is off by default because it has a few requirements:
+
+- The **Windows Firewall / Base Filtering Engine service must be running** — that service is what enforces the block.
+- The library grants the "ALL APPLICATION PACKAGES" identity read and execute rights on the executable (via `icacls`) so the AppContainer can load it, and creates a temporary AppContainer profile that it deletes when the process is disposed.
+- All the other hardening still applies: the throwaway desktop (its ACL grants the AppContainer identity) and the scrubbed environment are both kept — the environment just gains the handful of profile path variables the AppContainer needs to start (paths, not secrets).
 
 ## Building and testing
 

@@ -480,6 +480,50 @@ class Program
             Assert.Equal("hello-sandbox", result.ReceivedOutput.Trim());
         }
 
+        [Fact]
+        public void RestrictedProcessShouldBlockNetworkAccessInAppContainer()
+        {
+            const string ConnectSourceCode = @"using System;
+using System.Net.Sockets;
+class Program
+{
+    public static void Main()
+    {
+        Console.WriteLine(""START"");
+        try
+        {
+            using (var client = new TcpClient())
+            {
+                var task = client.ConnectAsync(""1.1.1.1"", 443);
+                if (task.Wait(3000) && client.Connected)
+                {
+                    Console.WriteLine(""CONNECTED"");
+                    return;
+                }
+                Console.WriteLine(""BLOCKED"");
+            }
+        }
+        catch (Exception)
+        {
+            Console.WriteLine(""BLOCKED"");
+        }
+    }
+}";
+            var exePath = this.CreateExe("RestrictedProcessShouldBlockNetworkAccessInAppContainer.exe", ConnectSourceCode);
+
+            // Control: the default sandbox allows outbound connections. If the host itself has no
+            // egress there is nothing to prove blocking against, so skip rather than fail.
+            var baseline = new RestrictedProcessExecutor().Execute(exePath, string.Empty, 6000, 64 * 1024 * 1024);
+            Assert.Contains("START", baseline.ReceivedOutput);
+            Assert.SkipUnless(baseline.ReceivedOutput.Contains("CONNECTED"), "The host has no outbound network access to test against.");
+
+            // With network access blocked the AppContainer child still runs but cannot connect out.
+            var options = new RestrictedProcessOptions { BlockNetworkAccess = true };
+            var result = new RestrictedProcessExecutor(options).Execute(exePath, string.Empty, 6000, 64 * 1024 * 1024);
+            Assert.Contains("START", result.ReceivedOutput); // the child actually ran inside the AppContainer
+            Assert.DoesNotContain("CONNECTED", result.ReceivedOutput);
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct NativeSecurityAttributes
         {

@@ -306,5 +306,20 @@ namespace RestrictedProcess.Process
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool CloseDesktop(IntPtr desktop);
+
+        [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+        internal static extern int DeriveAppContainerSidFromAppContainerName(string appContainerName, out IntPtr appContainerSid);
+
+        [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+        internal static extern int CreateAppContainerProfile(
+            string appContainerName,
+            string displayName,
+            string description,
+            SidAndAttributes[]? capabilities,
+            int capabilityCount,
+            out IntPtr appContainerSid);
+
+        [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+        internal static extern int DeleteAppContainerProfile(string appContainerName);
     }
 }

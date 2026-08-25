@@ -21,8 +21,9 @@ namespace RestrictedProcess.Process
         // DesktopCreateWindow | DesktopEnumerate | DesktopWriteObjects | DesktopReadObjects | ... = DESKTOP full access.
         private const uint GenericAll = 0x10000000;
 
-        // Grant GENERIC_ALL to Everyone (WD) and RESTRICTED (RC); label the desktop Low integrity (ML;;NW;;;LW).
-        private const string DesktopSecurityDescriptor = "D:(A;;GA;;;WD)(A;;GA;;;RC)S:(ML;;NW;;;LW)";
+        // Grant GENERIC_ALL to Everyone (WD), RESTRICTED (RC) and ALL APPLICATION PACKAGES (AC, so a
+        // network-blocked AppContainer process can use the desktop); label it Low integrity (ML;;NW;;;LW).
+        private const string DesktopSecurityDescriptor = "D:(A;;GA;;;WD)(A;;GA;;;RC)(A;;GA;;;AC)S:(ML;;NW;;;LW)";
 
         private IntPtr handle;
 
